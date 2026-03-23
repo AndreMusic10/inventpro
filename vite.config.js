@@ -8,3 +8,5 @@ export default defineConfig({
     port: process.env.PORT || 10000
   }
 })
+
+fix: expose vite preview host for render
