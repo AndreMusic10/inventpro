@@ -327,7 +327,7 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
     return (
       <>
         <div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1500}}/>
-        <aside style={{position:"fixed",top:0,left:0,bottom:0,width:240,background:"#0f172a",zIndex:1600,overflowY:"auto"}}>
+        <aside style={{position:"fixed",top:0,right:0,bottom:0,width:240,background:"#0f172a",zIndex:1600,overflowY:"auto"}}>
           {content}
         </aside>
       </>
@@ -335,7 +335,7 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
   }
 
   return (
-    <aside style={{width:220,background:"#0f172a",minHeight:"100vh",position:"fixed",top:0,left:0,bottom:0,overflowY:"auto",zIndex:100}}>
+    <aside style={{width:220,background:"#0f172a",minHeight:"100vh",position:"fixed",top:0,right:0,bottom:0,overflowY:"auto",zIndex:100}}>
       {content}
     </aside>
   );
@@ -345,7 +345,7 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
 //  STYLES FACTORY  (usa variables CSS del tema)
 // ═══════════════════════════════════════════════════════════════
 const makeStyles = (isMobile) => ({
-  main:     {marginLeft:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh",background:"var(--bg)"},
+  main:     {marginRight:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh",background:"var(--bg)"},
   header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10},
   title:    {fontSize:isMobile?18:22,fontWeight:900,color:"var(--text)",margin:0},
   kpiGrid:  (cols)=>({display:"grid",gridTemplateColumns:`repeat(${isMobile?Math.min(cols,2):cols},1fr)`,gap:12,marginBottom:18}),
@@ -704,24 +704,57 @@ const generateSKU = (name, existingSkus = []) => {
 
 const ProductConfigForm = ({initial, onSave, onClose, categories, providers, existingSkus}) => {
   const [f, setF] = useState(() => {
-    if (initial) return initial; // edición: no tocar el SKU
-    return {name:"",sku:"",categoryId:"",providerId:"",price:"",cost:"",stock:"",unit:"und",description:""};
+    if (initial) return initial;
+    return {name:"",sku:"",categoryId:"",providerId:"",price:"",cost:"",stock:"",unit:"und",description:"",image:""};
   });
 
   const set = (k,v) => setF(x=>({...x,[k]:v}));
 
-  // Auto-genera el SKU cuando cambia el nombre (solo al crear, no al editar)
   const handleNameChange = (e) => {
     const name = e.target.value;
     set("name", name);
     if (!initial && name.trim().length >= 2) {
-      // Regenera cada vez que el nombre cambia para reflejar el nuevo prefijo
-      const newSku = generateSKU(name, existingSkus);
-      set("sku", newSku);
+      set("sku", generateSKU(name, existingSkus));
     }
   };
+
+  // Convierte la imagen a base64
+  const handleImage = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 500_000) return alert("La imagen no debe superar 500KB. Usa una imagen más pequeña.");
+    const reader = new FileReader();
+    reader.onload = (ev) => set("image", ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div>
+      {/* Zona de imagen */}
+      <div style={{marginBottom:14}}>
+        <label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:6}}>📷 Imagen del producto</label>
+        <div style={{display:"flex",gap:12,alignItems:"center"}}>
+          <div style={{width:72,height:72,borderRadius:10,border:"2px dashed var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>
+            {f.image
+              ? <img src={f.image} alt="producto" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+              : "📦"
+            }
+          </div>
+          <div style={{flex:1}}>
+            <label style={{display:"inline-block",padding:"8px 14px",borderRadius:8,border:"1.5px solid var(--border)",background:"var(--bg3)",color:"var(--text)",cursor:"pointer",fontSize:13,fontWeight:600}}>
+              {f.image ? "Cambiar imagen" : "Subir imagen"}
+              <input type="file" accept="image/*" onChange={handleImage} style={{display:"none"}}/>
+            </label>
+            {f.image && (
+              <button onClick={()=>set("image","")} style={{marginLeft:8,padding:"8px 12px",borderRadius:8,border:"1.5px solid #fee2e2",background:"var(--bg2)",color:"#b91c1c",cursor:"pointer",fontSize:12,fontWeight:600}}>
+                ✕ Quitar
+              </button>
+            )}
+            <div style={{fontSize:10,color:"var(--text3)",marginTop:4}}>JPG, PNG o WEBP · Máx. 500KB</div>
+          </div>
+        </div>
+      </div>
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
         <Inp label="Nombre *"       value={f.name}  onChange={handleNameChange}                              placeholder="Ej: Camiseta azul"/>
         <div style={{marginBottom:12}}>
@@ -736,12 +769,9 @@ const ProductConfigForm = ({initial, onSave, onClose, categories, providers, exi
               style={{width:"100%",padding:"9px 36px 9px 12px",borderRadius:8,border:"1.5px solid #6366f1",fontSize:14,color:"#6366f1",fontWeight:700,fontFamily:"monospace",outline:"none",boxSizing:"border-box",background:"#eef2ff"}}
             />
             {!initial && (
-              <button
-                type="button"
-                title="Regenerar SKU"
+              <button type="button" title="Regenerar SKU"
                 onClick={()=>set("sku", generateSKU(f.name||"PRD", existingSkus))}
-                style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#6366f1",padding:"2px"}}
-              >🔄</button>
+                style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#6366f1",padding:"2px"}}>🔄</button>
             )}
           </div>
         </div>
@@ -941,9 +971,8 @@ export default function App() {
         {/* Mobile top bar */}
         {isMobile&&(
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <button onClick={()=>setSideOpen(true)} style={{background:"#0f172a",border:"none",borderRadius:9,width:36,height:36,cursor:"pointer",color:"#fff",fontSize:18}}>☰</button>
             <div style={{fontWeight:800,fontSize:15,color:"var(--text)"}}>{tab}</div>
-            <div style={{width:36}}/>
+            <button onClick={()=>setSideOpen(true)} style={{background:"#0f172a",border:"none",borderRadius:9,width:36,height:36,cursor:"pointer",color:"#fff",fontSize:18}}>☰</button>
           </div>
         )}
 
@@ -1063,14 +1092,23 @@ export default function App() {
                   const sc=p.stock===0?"red":p.stock<=(db.settings.lowStockThreshold||5)?"yellow":"green";
                   return (
                     <div key={p.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontWeight:700,fontSize:14}}>{p.name}</div>
-                        <div style={{fontSize:11,color:"#6366f1",fontFamily:"monospace",fontWeight:600}}>{p.sku}</div>
-                        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
-                          {cat&&<Badge color="blue">{cat.name}</Badge>}
-                          {prov&&<span style={{fontSize:10,color:"var(--text3)"}}>🏭 {prov.name}</span>}
+                      <div style={{display:"flex",gap:12,alignItems:"flex-start",flex:1,minWidth:0}}>
+                        {/* Imagen del producto */}
+                        <div style={{width:52,height:52,borderRadius:9,border:"1.5px solid var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>
+                          {p.image
+                            ? <img src={p.image} alt={p.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                            : "📦"
+                          }
                         </div>
-                        <div style={{fontSize:12,color:"var(--text4)",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontWeight:700,fontSize:14,color:"var(--text)"}}>{p.name}</div>
+                          <div style={{fontSize:11,color:"#6366f1",fontFamily:"monospace",fontWeight:600}}>{p.sku}</div>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                            {cat&&<Badge color="blue">{cat.name}</Badge>}
+                            {prov&&<span style={{fontSize:10,color:"var(--text3)"}}>🏭 {prov.name}</span>}
+                          </div>
+                          <div style={{fontSize:12,color:"var(--text4)",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
+                        </div>
                       </div>
                       <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
                         <Badge color={sc}>{p.stock} {p.unit}</Badge>
@@ -1094,15 +1132,27 @@ export default function App() {
                 return (
                   <div key={m.id} style={{...s.card,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                      <span style={{fontSize:22}}>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}</span>
+                      {/* Imagen o ícono de tipo */}
+                      <div style={{width:44,height:44,borderRadius:9,border:"1.5px solid var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,position:"relative"}}>
+                        {prod?.image
+                          ? <img src={prod.image} alt={prod.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                          : <span>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}</span>
+                        }
+                        {/* Badge de tipo sobre la imagen */}
+                        {prod?.image && (
+                          <span style={{position:"absolute",bottom:0,right:0,fontSize:10,background:"rgba(0,0,0,0.55)",borderRadius:"4px 0 8px 0",padding:"1px 3px"}}>
+                            {m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}
+                          </span>
+                        )}
+                      </div>
                       <div>
-                        <div style={{fontWeight:700,fontSize:13}}>{m.productName}</div>
+                        <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{m.productName}</div>
                         <div style={{fontSize:10,color:"var(--text3)"}}>{m.date}{m.note?` · ${m.note}`:""}</div>
                       </div>
                     </div>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
                       <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>{m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}</Badge>
-                      {prod&&m.type==="salida"&&<span style={{fontWeight:700,fontSize:13}}>{formatCOP(prod.price*m.qty)}</span>}
+                      {prod&&m.type==="salida"&&<span style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{formatCOP(prod.price*m.qty)}</span>}
                     </div>
                   </div>
                 );

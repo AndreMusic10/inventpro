@@ -45,7 +45,7 @@ export function useDB() {
       ])
 
       // Mapea snake_case de Supabase → camelCase de la app
-      const mapProduct   = p => ({ id:p.id, name:p.name, sku:p.sku, categoryId:p.category_id, providerId:p.provider_id, price:Number(p.price), cost:Number(p.cost), stock:p.stock, unit:p.unit, description:p.description })
+      const mapProduct   = p => ({ id:p.id, name:p.name, sku:p.sku, categoryId:p.category_id, providerId:p.provider_id, price:Number(p.price), cost:Number(p.cost), stock:p.stock, unit:p.unit, description:p.description, image:p.image||"" })
       const mapOrder     = o => ({ id:o.id, clientId:o.client_id, paymentMethodId:o.payment_method_id, state:o.state, items:o.items||[], note:o.note, discount:Number(o.discount||0), delivery:o.delivery, total:Number(o.total||0), createdAt:new Date(o.created_at).toLocaleString('es-CO'), updatedAt:new Date(o.updated_at).toLocaleString('es-CO') })
       const mapMovement  = m => ({ id:m.id, productId:m.product_id, productName:m.product_name, sku:m.sku, type:m.type, qty:m.qty, note:m.note, stockAfter:m.stock_after, discount:Number(m.discount||0), date:new Date(m.created_at).toLocaleString('es-CO') })
       const mapDelivery  = d => ({ id:d.id, name:d.name, phone:d.phone, address:d.address, value:Number(d.value||0), orderValue:Number(d.order_value||0), discount:Number(d.discount||0), products:d.products||[], date:new Date(d.created_at).toLocaleString('es-CO') })
@@ -81,14 +81,15 @@ export function useDB() {
   const addProduct = async (d) => {
     const { data, error } = await supabase.from('products').insert({
       name:d.name, sku:d.sku, category_id:d.categoryId||null, provider_id:d.providerId||null,
-      price:d.price, cost:d.cost, stock:d.stock, unit:d.unit, description:d.description
+      price:d.price, cost:d.cost, stock:d.stock, unit:d.unit, description:d.description,
+      image:d.image||null,
     }).select().single()
     if (error) throw new Error(error.message)
-    setDb(db => ({ ...db, products: [...db.products, { id:data.id, name:data.name, sku:data.sku, categoryId:data.category_id, providerId:data.provider_id, price:Number(data.price), cost:Number(data.cost), stock:data.stock, unit:data.unit, description:data.description }] }))
+    setDb(db => ({ ...db, products: [...db.products, { id:data.id, name:data.name, sku:data.sku, categoryId:data.category_id, providerId:data.provider_id, price:Number(data.price), cost:Number(data.cost), stock:data.stock, unit:data.unit, description:data.description, image:data.image||"" }] }))
   }
 
   const editProduct = async (d) => {
-    check(await supabase.from('products').update({ name:d.name, sku:d.sku, category_id:d.categoryId||null, provider_id:d.providerId||null, price:d.price, cost:d.cost, stock:d.stock, unit:d.unit, description:d.description }).eq('id', d.id))
+    check(await supabase.from('products').update({ name:d.name, sku:d.sku, category_id:d.categoryId||null, provider_id:d.providerId||null, price:d.price, cost:d.cost, stock:d.stock, unit:d.unit, description:d.description, image:d.image||null }).eq('id', d.id))
     setDb(db => ({ ...db, products: db.products.map(p => p.id===d.id ? d : p) }))
   }
 
