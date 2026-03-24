@@ -899,23 +899,39 @@ export default function App() {
   const [movNote,     setMovNote]     = useState("");
   const [movDiscount, setMovDiscount] = useState("");
   const [movDelivery, setMovDelivery] = useState({name:"",address:"",phone:"",value:""});
+  const [movProvider, setMovProvider] = useState("");
   const [movGen,      setMovGen]      = useState(false);
 
   const openMovModal = (product=null) => {
     setMovLines(product?[{productId:product.id,qty:""}]:[{productId:"",qty:""}]);
-    setMovType("salida"); setMovNote(""); setMovDiscount(""); setMovDelivery({name:"",address:"",phone:"",value:""});
+    setMovType("salida"); setMovNote(""); setMovDiscount("");
+    setMovDelivery({name:"",address:"",phone:"",value:""});
+    setMovProvider("");
     setMovPreProduct(product); setShowMovForm(true);
   };
 
   const resolvedMovLines = movLines.map(r=>({product:db.products.find(p=>p.id===Number(r.productId)),qty:Number(r.qty)})).filter(r=>r.product&&r.qty>0);
   const movSubtotal = resolvedMovLines.reduce((s,r)=>s+r.product.price*r.qty,0);
-  const movTotal = movSubtotal-(Number(movDiscount)||0)+(Number(movDelivery.value)||0);
+  // Domicilio solo aplica a salidas
+  const movTotal = movType==="salida"
+    ? movSubtotal-(Number(movDiscount)||0)+(Number(movDelivery.value)||0)
+    : movSubtotal;
 
   const handleMovSave = async ()=>{
     if(resolvedMovLines.length===0) return alert("Agrega al menos un producto.");
     for(const {product,qty} of resolvedMovLines) if(movType==="salida"&&qty>product.stock) return alert(`Stock insuficiente: ${product.name}`);
+
+    // Para entradas, añadir proveedor a la nota
+    const prov = db.providers.find(p=>p.id===Number(movProvider));
+    const noteConProveedor = movType==="entrada" && prov
+      ? `${movNote ? movNote+" · " : ""}Proveedor: ${prov.name}`
+      : movNote;
+
+    // Para entradas/ajustes, no enviar domicilio
+    const delivery = movType==="salida" ? movDelivery : {name:"",address:"",phone:"",value:""};
+
     try {
-      await registerMovement(resolvedMovLines,movType,movNote,movDiscount,movDelivery);
+      await registerMovement(resolvedMovLines, movType, noteConProveedor, movDiscount, delivery);
       if(movType==="salida"){
         setMovGen(true);
         try{
@@ -1421,18 +1437,46 @@ export default function App() {
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
             <Inp label="Nota" value={movNote} onChange={e=>setMovNote(e.target.value)} placeholder="Referencia…"/>
-            <Inp label="Descuento" type="number" value={movDiscount} onChange={e=>setMovDiscount(e.target.value)} placeholder="0"/>
+            {movType==="salida" && (
+              <Inp label="Descuento" type="number" value={movDiscount} onChange={e=>setMovDiscount(e.target.value)} placeholder="0"/>
+            )}
           </div>
 
-          <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
-          <div style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:10}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
-              <Inp label="Cliente" value={movDelivery.name}    onChange={e=>setMovDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
-              <Inp label="Teléfono" value={movDelivery.phone}  onChange={e=>setMovDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
-            </div>
-            <Inp label="Dirección" value={movDelivery.address} onChange={e=>setMovDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
-            <Inp label="Valor domicilio" type="number" value={movDelivery.value} onChange={e=>setMovDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
-          </div>
+          {/* ENTRADA: selector de proveedor */}
+          {movType==="entrada" && (
+            <>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🏭 Proveedor</div>
+              <div style={{background:"var(--input-bg)",borderRadius:9,padding:"12px 14px",border:"1.5px solid var(--border)",marginBottom:10}}>
+                <Sel label="Selecciona el proveedor" value={movProvider} onChange={e=>setMovProvider(e.target.value)}
+                  options={[{value:"",label:"— Sin proveedor —"},...db.providers.map(p=>({value:p.id,label:`${p.name}${p.contact?" · "+p.contact:""}`}))]}/>
+                {movProvider && (() => {
+                  const prov = db.providers.find(p=>p.id===Number(movProvider));
+                  return prov ? (
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:11,color:"var(--text4)"}}>
+                      {prov.phone && <span>📞 {prov.phone}</span>}
+                      {prov.email && <span>✉️ {prov.email}</span>}
+                      {prov.notes && <span>📝 {prov.notes}</span>}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            </>
+          )}
+
+          {/* SALIDA: domicilio */}
+          {movType==="salida" && (
+            <>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
+              <div style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:10}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
+                  <Inp label="Cliente"  value={movDelivery.name}    onChange={e=>setMovDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
+                  <Inp label="Teléfono" value={movDelivery.phone}   onChange={e=>setMovDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
+                </div>
+                <Inp label="Dirección"     value={movDelivery.address} onChange={e=>setMovDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
+                <Inp label="Valor domicilio" type="number" value={movDelivery.value} onChange={e=>setMovDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
+              </div>
+            </>
+          )}
 
           {resolvedMovLines.length>0&&(
             <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:10,padding:"10px 14px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
