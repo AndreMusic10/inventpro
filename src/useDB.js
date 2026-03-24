@@ -181,38 +181,190 @@ export function useDB() {
   // ══════════════════════════════════════════════════════════════════════════
   //  ORDERS
   // ══════════════════════════════════════════════════════════════════════════
+
+  // Helper interno: inserta un movimiento y actualiza el stock
+  const _insertMovement = async (product, qty, type, note) => {
+    const sa = type === 'entrada' ? product.stock + qty
+             : type === 'salida'  ? product.stock - qty
+             : qty
+
+    const { data: movData, error: movErr } = await supabase.from('movements').insert({
+      product_id:   product.id,
+      product_name: product.name,
+      sku:          product.sku,
+      type,
+      qty,
+      note,
+      stock_after:  sa,
+      discount:     0,
+    }).select().single()
+    if (movErr) throw new Error(movErr.message)
+
+    await supabase.from('products').update({ stock: sa }).eq('id', product.id)
+
+    const mapped = {
+      id:          movData.id,
+      productId:   movData.product_id,
+      productName: movData.product_name,
+      sku:         movData.sku,
+      type:        movData.type,
+      qty:         movData.qty,
+      note:        movData.note,
+      stockAfter:  movData.stock_after,
+      discount:    0,
+      date:        new Date(movData.created_at).toLocaleString('es-CO'),
+    }
+
+    // Actualiza estado local: movimiento + stock del producto
+    setDb(db => ({
+      ...db,
+      movements: [mapped, ...db.movements],
+      products:  db.products.map(p => p.id === product.id ? { ...p, stock: sa } : p),
+    }))
+
+    return mapped
+  }
+
   const addOrder = async (d) => {
+    // 1. Verificar stock suficiente antes de crear el pedido
+    for (const line of d.items) {
+      const prod = db.products.find(p => p.id === Number(line.productId))
+      if (!prod) continue
+      const qty = Number(line.qty)
+      if (qty > prod.stock) {
+        throw new Error(`Stock insuficiente para "${prod.name}". Disponible: ${prod.stock} ${prod.unit}`)
+      }
+    }
+
+    // 2. Crear el pedido en Supabase
     const { data, error } = await supabase.from('orders').insert({
-      client_id: d.clientId||null, payment_method_id: d.paymentMethodId||null,
-      state: 'Pendiente', items: d.items, note: d.note,
-      discount: d.discount||0, delivery: d.delivery, total: d.total,
+      client_id:         d.clientId || null,
+      payment_method_id: d.paymentMethodId || null,
+      state:             'Pendiente',
+      items:             d.items,
+      note:              d.note,
+      discount:          d.discount || 0,
+      delivery:          d.delivery,
+      total:             d.total,
     }).select().single()
     if (error) throw new Error(error.message)
-    const mapped = { id:data.id, clientId:data.client_id, paymentMethodId:data.payment_method_id, state:data.state, items:data.items, note:data.note, discount:Number(data.discount), delivery:data.delivery, total:Number(data.total), createdAt:new Date(data.created_at).toLocaleString('es-CO'), updatedAt:new Date(data.updated_at).toLocaleString('es-CO') }
+
+    const mapped = {
+      id:              data.id,
+      clientId:        data.client_id,
+      paymentMethodId: data.payment_method_id,
+      state:           data.state,
+      items:           data.items,
+      note:            data.note,
+      discount:        Number(data.discount),
+      delivery:        data.delivery,
+      total:           Number(data.total),
+      createdAt:       new Date(data.created_at).toLocaleString('es-CO'),
+      updatedAt:       new Date(data.updated_at).toLocaleString('es-CO'),
+    }
     setDb(db => ({ ...db, orders: [mapped, ...db.orders] }))
+
+    // 3. Generar movimiento de SALIDA por cada producto del pedido
+    const noteMovimiento = `Pedido #${String(data.id).padStart(4,'0')}${d.note ? ' · ' + d.note : ''}`
+    for (const line of d.items) {
+      const prod = db.products.find(p => p.id === Number(line.productId))
+      if (!prod || !Number(line.qty)) continue
+      await _insertMovement(prod, Number(line.qty), 'salida', noteMovimiento)
+    }
+
+    // 4. Registrar domicilio si el pedido tiene datos de entrega
+    if (d.delivery?.name) {
+      const { data: delData, error: delErr } = await supabase.from('deliveries').insert({
+        name:        d.delivery.name,
+        phone:       d.delivery.phone,
+        address:     d.delivery.address,
+        value:       Number(d.delivery.value) || 0,
+        order_value: d.total,
+        discount:    d.discount || 0,
+        products:    d.items.map(l => {
+          const p = db.products.find(x => x.id === Number(l.productId))
+          return p ? `${p.name} x${l.qty}` : `Producto x${l.qty}`
+        }),
+      }).select().single()
+      if (!delErr && delData) {
+        const delMapped = {
+          id:         delData.id,
+          name:       delData.name,
+          phone:      delData.phone,
+          address:    delData.address,
+          value:      Number(delData.value),
+          orderValue: Number(delData.order_value),
+          discount:   Number(delData.discount),
+          products:   delData.products,
+          date:       new Date(delData.created_at).toLocaleString('es-CO'),
+        }
+        setDb(db => ({ ...db, deliveries: [delMapped, ...db.deliveries] }))
+      }
+    }
   }
 
   const editOrder = async (d) => {
+    // Obtener el pedido original para calcular diferencias de stock
+    const original = db.orders.find(o => o.id === d.id)
+
     check(await supabase.from('orders').update({
-      client_id:d.clientId||null, payment_method_id:d.paymentMethodId||null,
-      items:d.items, note:d.note, discount:d.discount||0, delivery:d.delivery, total:d.total, updated_at: new Date().toISOString()
+      client_id:         d.clientId || null,
+      payment_method_id: d.paymentMethodId || null,
+      items:             d.items,
+      note:              d.note,
+      discount:          d.discount || 0,
+      delivery:          d.delivery,
+      total:             d.total,
+      updated_at:        new Date().toISOString(),
     }).eq('id', d.id))
+
     setDb(db => ({ ...db, orders: db.orders.map(o => o.id===d.id ? { ...o, ...d, updatedAt: new Date().toLocaleString('es-CO') } : o) }))
+
+    // Ajustar stock: devolver stock del pedido original y descontar el nuevo
+    if (original) {
+      const noteAjuste = `Ajuste pedido #${String(d.id).padStart(4,'0')}`
+
+      // Devolver stock de los items originales (entrada)
+      for (const line of original.items) {
+        const prod = db.products.find(p => p.id === Number(line.productId))
+        if (!prod || !Number(line.qty)) continue
+        await _insertMovement(prod, Number(line.qty), 'entrada', noteAjuste + ' (reverso)')
+      }
+
+      // Descontar stock de los items nuevos (salida)
+      for (const line of d.items) {
+        const prod = db.products.find(p => p.id === Number(line.productId))
+        if (!prod || !Number(line.qty)) continue
+        await _insertMovement(prod, Number(line.qty), 'salida', noteAjuste + ' (nuevo)')
+      }
+    }
   }
 
   const advanceOrder = async (id) => {
-    const ORDER_STATES = ['Pendiente','En proceso','Enviado','Entregado']
-    const order = db.orders.find(o => o.id===id)
+    const ORDER_STATES = ['Pendiente', 'En proceso', 'Enviado', 'Entregado']
+    const order = db.orders.find(o => o.id === id)
     if (!order) return
-    const idx = ORDER_STATES.indexOf(order.state)
-    const next = ORDER_STATES[idx+1] || order.state
+    const idx  = ORDER_STATES.indexOf(order.state)
+    const next = ORDER_STATES[idx + 1] || order.state
     check(await supabase.from('orders').update({ state: next, updated_at: new Date().toISOString() }).eq('id', id))
     setDb(db => ({ ...db, orders: db.orders.map(o => o.id===id ? { ...o, state: next, updatedAt: new Date().toLocaleString('es-CO') } : o) }))
   }
 
   const cancelOrder = async (id) => {
+    const order = db.orders.find(o => o.id === id)
+
     check(await supabase.from('orders').update({ state: 'Cancelado', updated_at: new Date().toISOString() }).eq('id', id))
     setDb(db => ({ ...db, orders: db.orders.map(o => o.id===id ? { ...o, state: 'Cancelado', updatedAt: new Date().toLocaleString('es-CO') } : o) }))
+
+    // Devolver stock: generar movimiento de ENTRADA por cada producto
+    if (order) {
+      const noteDevolucion = `Cancelación pedido #${String(id).padStart(4,'0')}`
+      for (const line of order.items) {
+        const prod = db.products.find(p => p.id === Number(line.productId))
+        if (!prod || !Number(line.qty)) continue
+        await _insertMovement(prod, Number(line.qty), 'entrada', noteDevolucion)
+      }
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
