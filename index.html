@@ -1,13 +1,57 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mi-inventario</title>
+
+    <!-- Native PWA viewport -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- PWA manifest -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Theme color (cambia con el modo) -->
+    <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+
+    <!-- Android PWA -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="InvenPro" />
+
+    <!-- iOS PWA (instalación nativa) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="InvenPro" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <!-- Splash screens iOS -->
+    <link rel="apple-touch-startup-image" href="/icon-512.png" />
+
+    <!-- Prevenir comportamientos del navegador no deseados -->
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="msapplication-tap-highlight" content="no" />
+
+    <title>InvenPro</title>
+    <meta name="description" content="Control de inventario para tu negocio" />
+    <link rel="icon" href="/icon-192.png" />
+
+    <style>
+      /* Prevenir flash blanco en carga */
+      html { background: #f5f5f7; }
+      @media (prefers-color-scheme: dark) { html { background: #000; } }
+      body { margin: 0; }
+      #root { min-height: 100dvh; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/sw.js")
+            .then(r => console.log("✅ SW registrado:", r.scope))
+            .catch(e => console.warn("SW error:", e));
+        });
+      }
+    </script>
   </body>
 </html>
