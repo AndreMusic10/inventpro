@@ -354,10 +354,7 @@ export function useDB() {
   const cancelOrder = async (id) => {
     const order = db.orders.find(o => o.id === id)
 
-    check(await supabase.from('orders').update({ state: 'Cancelado', updated_at: new Date().toISOString() }).eq('id', id))
-    setDb(db => ({ ...db, orders: db.orders.map(o => o.id===id ? { ...o, state: 'Cancelado', updatedAt: new Date().toLocaleString('es-CO') } : o) }))
-
-    // Devolver stock: generar movimiento de ENTRADA por cada producto
+    // Devolver stock primero: entrada por cada producto del pedido
     if (order) {
       const noteDevolucion = `Cancelación pedido #${String(id).padStart(4,'0')}`
       for (const line of order.items) {
@@ -366,6 +363,10 @@ export function useDB() {
         await _insertMovement(prod, Number(line.qty), 'entrada', noteDevolucion)
       }
     }
+
+    // Eliminar el pedido definitivamente de la base de datos
+    check(await supabase.from('orders').delete().eq('id', id))
+    setDb(db => ({ ...db, orders: db.orders.filter(o => o.id !== id) }))
   }
 
   // ══════════════════════════════════════════════════════════════════════════
