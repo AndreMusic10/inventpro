@@ -17,8 +17,96 @@ const useIsMobile = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  CONSTANTS
+//  THEME SYSTEM
 // ═══════════════════════════════════════════════════════════════
+const THEME_KEY = "invenpro_theme";
+
+const THEMES = {
+  light: {
+    "--bg":          "#f1f5f9",
+    "--bg2":         "#ffffff",
+    "--bg3":         "#f8fafc",
+    "--bg4":         "#f1f5f9",
+    "--border":      "#e2e8f0",
+    "--text":        "#0f172a",
+    "--text2":       "#475569",
+    "--text3":       "#94a3b8",
+    "--text4":       "#64748b",
+    "--card-shadow": "0 1px 4px rgba(0,0,0,0.06)",
+    "--sidebar-bg":  "#0f172a",
+    "--sidebar-border": "#1e293b",
+    "--sidebar-text":"#94a3b8",
+    "--sidebar-sub": "#334155",
+    "--input-bg":    "#f8fafc",
+    "--row-alt":     "#fafafa",
+  },
+  dark: {
+    "--bg":          "#0f172a",
+    "--bg2":         "#1e293b",
+    "--bg3":         "#1a2744",
+    "--bg4":         "#162032",
+    "--border":      "#334155",
+    "--text":        "#f1f5f9",
+    "--text2":       "#cbd5e1",
+    "--text3":       "#64748b",
+    "--text4":       "#94a3b8",
+    "--card-shadow": "0 1px 6px rgba(0,0,0,0.35)",
+    "--sidebar-bg":  "#020617",
+    "--sidebar-border": "#0f172a",
+    "--sidebar-text":"#64748b",
+    "--sidebar-sub": "#1e293b",
+    "--input-bg":    "#162032",
+    "--row-alt":     "#1a2744",
+  },
+};
+
+const applyTheme = (mode) => {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const resolved = mode === "system" ? (prefersDark ? "dark" : "light") : mode;
+  const vars = THEMES[resolved];
+  const root = document.documentElement;
+  Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v));
+  root.setAttribute("data-theme", resolved);
+};
+
+const useTheme = () => {
+  const [theme, setThemeState] = useState(() => localStorage.getItem(THEME_KEY) || "system");
+
+  useEffect(() => {
+    applyTheme(theme);
+    // Escuchar cambios del sistema si está en modo "system"
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => { if (theme === "system") applyTheme("system"); };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [theme]);
+
+  const setTheme = (t) => {
+    localStorage.setItem(THEME_KEY, t);
+    setThemeState(t);
+    applyTheme(t);
+  };
+
+  return { theme, setTheme };
+};
+
+// CSS global con variables de tema aplicadas
+const injectGlobalCSS = () => {
+  if (document.getElementById("invenpro-theme-css")) return;
+  const style = document.createElement("style");
+  style.id = "invenpro-theme-css";
+  style.textContent = `
+    *, *::before, *::after { box-sizing: border-box; transition: background-color 0.2s, border-color 0.2s, color 0.15s; }
+    body { background: var(--bg); color: var(--text); margin: 0; }
+    input, select, textarea { color-scheme: light dark; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  `;
+  document.head.appendChild(style);
+};
+
+
 const ORDER_STATES = ["Pendiente", "En proceso", "Enviado", "Entregado"];
 const ORDER_STATE_COLORS = {
   "Pendiente":   { bg:"#fef9c3", text:"#a16207", dot:"#f59e0b" },
@@ -129,11 +217,11 @@ const Badge = ({children,color="gray"}) => {
 };
 
 const Modal = ({title,onClose,children,maxWidth=540}) => (
-  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.65)",zIndex:3000,display:"flex",alignItems:"flex-start",justifyContent:"center",backdropFilter:"blur(4px)",overflowY:"auto",padding:"16px 12px"}}>
-    <div style={{background:"#fff",borderRadius:16,padding:"22px 22px",width:"100%",maxWidth,boxShadow:"0 24px 80px rgba(0,0,0,0.25)",margin:"auto",boxSizing:"border-box"}}>
+  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.7)",zIndex:3000,display:"flex",alignItems:"flex-start",justifyContent:"center",backdropFilter:"blur(4px)",overflowY:"auto",padding:"16px 12px"}}>
+    <div style={{background:"var(--bg2)",borderRadius:16,padding:"22px 22px",width:"100%",maxWidth,boxShadow:"0 24px 80px rgba(0,0,0,0.35)",margin:"auto",boxSizing:"border-box"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-        <h2 style={{margin:0,fontSize:16,fontWeight:800,color:"#0f172a"}}>{title}</h2>
-        <button onClick={onClose} style={{background:"#f1f5f9",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:20,color:"#64748b"}}>×</button>
+        <h2 style={{margin:0,fontSize:16,fontWeight:800,color:"var(--text)"}}>{title}</h2>
+        <button onClick={onClose} style={{background:"var(--bg3)",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:20,color:"var(--text4)"}}>×</button>
       </div>
       {children}
     </div>
@@ -142,29 +230,29 @@ const Modal = ({title,onClose,children,maxWidth=540}) => (
 
 const Inp = ({label,...p}) => (
   <div style={{marginBottom:12}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
-    <input {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,color:"#0f172a",outline:"none",boxSizing:"border-box",background:"#f8fafc",...p.style}}/>
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:4}}>{label}</label>}
+    <input {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,color:"var(--text)",outline:"none",boxSizing:"border-box",background:"var(--input-bg)",...p.style}}/>
   </div>
 );
 
 const Sel = ({label,options,...p}) => (
   <div style={{marginBottom:12}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
-    <select {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,color:"#0f172a",background:"#f8fafc",outline:"none",boxSizing:"border-box"}}>
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:4}}>{label}</label>}
+    <select {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,color:"var(--text)",background:"var(--input-bg)",outline:"none",boxSizing:"border-box"}}>
       {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
     </select>
   </div>
 );
 
 const Btn = ({children,variant="primary",size="md",...p}) => {
-  const bg={primary:"linear-gradient(135deg,#6366f1,#8b5cf6)",danger:"#fee2e2",secondary:"#f1f5f9",green:"linear-gradient(135deg,#10b981,#059669)"};
-  const col={primary:"#fff",danger:"#b91c1c",secondary:"#334155",green:"#fff"};
+  const bg={primary:"linear-gradient(135deg,#6366f1,#8b5cf6)",danger:"#fee2e2",secondary:"var(--bg3)",green:"linear-gradient(135deg,#10b981,#059669)"};
+  const col={primary:"#fff",danger:"#b91c1c",secondary:"var(--text)",green:"#fff"};
   const pad={md:"10px 18px",sm:"7px 13px",lg:"12px 24px"};
   return <button {...p} style={{padding:pad[size],borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:size==="sm"?12:14,background:bg[variant],color:col[variant],boxShadow:variant==="primary"||variant==="green"?"0 3px 10px rgba(99,102,241,0.25)":"none",opacity:p.disabled?0.6:1,...p.style}}>{children}</button>;
 };
 
 const EmptyState = ({icon,text}) => (
-  <div style={{padding:"44px 16px",textAlign:"center",color:"#94a3b8"}}>
+  <div style={{padding:"44px 16px",textAlign:"center",color:"var(--text3)"}}>
     <div style={{fontSize:36,marginBottom:8}}>{icon}</div>
     <div style={{fontSize:13}}>{text}</div>
   </div>
@@ -173,7 +261,7 @@ const EmptyState = ({icon,text}) => (
 // ═══════════════════════════════════════════════════════════════
 //  SIDEBAR
 // ═══════════════════════════════════════════════════════════════
-const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
+const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) => {
   const lowStock = db.products.filter(p=>p.stock<=(db.settings.lowStockThreshold||5)).length;
   const pendingOrders = db.orders.filter(o=>o.state==="Pendiente").length;
 
@@ -184,9 +272,9 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <div style={{fontSize:17,fontWeight:900,color:"#fff",letterSpacing:-0.5}}>📦 InvenPro</div>
-            <div style={{fontSize:10,color:"#64748b",marginTop:1}}>{db.settings.businessName}</div>
+            <div style={{fontSize:10,color:"var(--text4)",marginTop:1}}>{db.settings.businessName}</div>
           </div>
-          {isMobile&&<button onClick={()=>setSideOpen(false)} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer"}}>×</button>}
+          {isMobile&&<button onClick={()=>setSideOpen(false)} style={{background:"none",border:"none",color:"var(--text4)",fontSize:20,cursor:"pointer"}}>×</button>}
         </div>
       </div>
 
@@ -194,7 +282,7 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
       <nav style={{flex:1,overflowY:"auto",padding:"10px 10px"}}>
         {NAV_GROUPS.map(group=>(
           <div key={group.label} style={{marginBottom:6}}>
-            <div style={{fontSize:9,fontWeight:700,color:"#334155",letterSpacing:1,textTransform:"uppercase",padding:"6px 8px 4px"}}>{group.label}</div>
+            <div style={{fontSize:9,fontWeight:700,color:"var(--text)",letterSpacing:1,textTransform:"uppercase",padding:"6px 8px 4px"}}>{group.label}</div>
             {group.items.map(t=>{
               const active = tab===t;
               const badge = t==="Alertas"&&lowStock>0?lowStock : t==="Pedidos"&&pendingOrders>0?pendingOrders : null;
@@ -210,8 +298,26 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
         ))}
       </nav>
 
-      <div style={{padding:"10px 14px",fontSize:10,color:"#334155",borderTop:"1px solid #1e293b"}}>
+      <div style={{padding:"10px 14px",fontSize:10,color:"var(--sidebar-sub)",borderTop:"1px solid var(--sidebar-border)"}}>
         {db.products.length} productos · {db.clients.length} clientes
+      </div>
+
+      {/* Selector de tema */}
+      <div style={{padding:"10px 14px 14px",borderTop:"1px solid var(--sidebar-border)"}}>
+        <div style={{fontSize:9,fontWeight:700,color:"var(--sidebar-text)",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Apariencia</div>
+        <div style={{display:"flex",gap:4}}>
+          {[
+            {key:"light",  icon:"☀️", label:"Claro"},
+            {key:"dark",   icon:"🌙", label:"Oscuro"},
+            {key:"system", icon:"💻", label:"Sistema"},
+          ].map(t=>(
+            <button key={t.key} onClick={()=>setTheme(t.key)} title={t.label}
+              style={{flex:1,padding:"5px 0",borderRadius:7,border:theme===t.key?"1.5px solid #6366f1":"1.5px solid var(--sidebar-border)",background:theme===t.key?"#6366f1":"transparent",color:theme===t.key?"#fff":"var(--sidebar-text)",cursor:"pointer",fontSize:14,display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
+              <span>{t.icon}</span>
+              <span style={{fontSize:8,fontWeight:600}}>{t.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -236,26 +342,26 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  STYLES FACTORY
+//  STYLES FACTORY  (usa variables CSS del tema)
 // ═══════════════════════════════════════════════════════════════
 const makeStyles = (isMobile) => ({
-  main:     {marginLeft:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh"},
+  main:     {marginLeft:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh",background:"var(--bg)"},
   header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10},
-  title:    {fontSize:isMobile?18:22,fontWeight:900,color:"#0f172a",margin:0},
+  title:    {fontSize:isMobile?18:22,fontWeight:900,color:"var(--text)",margin:0},
   kpiGrid:  (cols)=>({display:"grid",gridTemplateColumns:`repeat(${isMobile?Math.min(cols,2):cols},1fr)`,gap:12,marginBottom:18}),
-  kpiCard:  (c)=>({background:"#fff",borderRadius:12,padding:isMobile?"12px 14px":"16px 18px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`4px solid ${c}`}),
-  kpiVal:   {fontSize:isMobile?18:24,fontWeight:900,color:"#0f172a",lineHeight:1.1,marginBottom:3},
-  kpiLabel: {fontSize:isMobile?10:12,color:"#64748b",fontWeight:500},
-  card:     {background:"#fff",borderRadius:13,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",overflow:"hidden",marginBottom:16},
-  tHead:    (cols)=>({display:"grid",gridTemplateColumns:cols,padding:"8px 16px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}),
-  tRow:     (cols)=>({display:"grid",gridTemplateColumns:cols,alignItems:"center",padding:"11px 16px",borderBottom:"1px solid #f1f5f9"}),
-  th:       {fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.6},
+  kpiCard:  (c)=>({background:"var(--bg2)",borderRadius:12,padding:isMobile?"12px 14px":"16px 18px",boxShadow:"var(--card-shadow)",borderLeft:`4px solid ${c}`}),
+  kpiVal:   {fontSize:isMobile?18:24,fontWeight:900,color:"var(--text)",lineHeight:1.1,marginBottom:3},
+  kpiLabel: {fontSize:isMobile?10:12,color:"var(--text4)",fontWeight:500},
+  card:     {background:"var(--bg2)",borderRadius:13,boxShadow:"var(--card-shadow)",overflow:"hidden",marginBottom:16},
+  tHead:    (cols)=>({display:"grid",gridTemplateColumns:cols,padding:"8px 16px",background:"var(--bg3)",borderBottom:"1px solid var(--border)"}),
+  tRow:     (cols)=>({display:"grid",gridTemplateColumns:cols,alignItems:"center",padding:"11px 16px",borderBottom:"1px solid var(--bg4)"}),
+  th:       {fontSize:10,fontWeight:700,color:"var(--text3)",textTransform:"uppercase",letterSpacing:0.6},
   toolbar:  {display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"},
   searchW:  {position:"relative",flex:1,minWidth:140},
-  searchI:  {width:"100%",padding:"9px 14px 9px 34px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,outline:"none",background:"#f8fafc",color:"#0f172a",boxSizing:"border-box"},
+  searchI:  {width:"100%",padding:"9px 14px 9px 34px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:14,outline:"none",background:"var(--input-bg)",color:"var(--text)",boxSizing:"border-box"},
   iconBtn:  {background:"none",border:"none",cursor:"pointer",padding:"6px 7px",borderRadius:8,fontSize:16},
-  bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"#0f172a",zIndex:500,display:"flex",borderTop:"1px solid #1e293b",paddingBottom:"env(safe-area-inset-bottom,0)"},
-  bottomBtn:(a)=>({flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 2px 6px",border:"none",background:"transparent",cursor:"pointer",color:a?"#818cf8":"#64748b",fontSize:9,fontWeight:a?700:500,gap:2,minWidth:0}),
+  bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"var(--sidebar-bg)",zIndex:500,display:"flex",borderTop:"1px solid var(--sidebar-border)",paddingBottom:"env(safe-area-inset-bottom,0)"},
+  bottomBtn:(a)=>({flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 2px 6px",border:"none",background:"transparent",cursor:"pointer",color:a?"#818cf8":"var(--sidebar-text)",fontSize:9,fontWeight:a?700:500,gap:2,minWidth:0}),
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -297,25 +403,25 @@ const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
           options={[{value:"",label:"— Selecciona —"},...db.paymentMethods.map(p=>({value:p.id,label:`${p.icon} ${p.name}`}))]}/>
       </div>
 
-      <div style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,margin:"10px 0 8px"}}>📦 Productos</div>
+      <div style={{fontSize:12,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,margin:"10px 0 8px"}}>📦 Productos</div>
       {lines.map((line,idx)=>{
         const prod=db.products.find(p=>p.id===Number(line.productId));
         return (
-          <div key={idx} style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:8}}>
+          <div key={idx} style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:8}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 80px 30px",gap:8,alignItems:"end"}}>
               <div>
-                <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Producto</label>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--text4)",marginBottom:3}}>Producto</label>
                 <select value={line.productId} onChange={e=>setLine(idx,"productId",e.target.value)}
-                  style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"#fff",outline:"none"}}>
+                  style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"var(--bg2)",outline:"none"}}>
                   <option value="">— Selecciona —</option>
                   {db.products.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stock} {p.unit}</option>)}
                 </select>
                 {prod&&<div style={{fontSize:10,color:"#6366f1",fontWeight:600,marginTop:3}}>{prod.sku} · {formatCOP(prod.price)} · Stock: {prod.stock}</div>}
               </div>
               <div>
-                <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Cant.</label>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--text4)",marginBottom:3}}>Cant.</label>
                 <input type="number" value={line.qty} onChange={e=>setLine(idx,"qty",e.target.value)} placeholder="0"
-                  style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,fontWeight:700,color:"#0f172a",outline:"none",background:"#fff",boxSizing:"border-box"}}/>
+                  style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,fontWeight:700,color:"var(--text)",outline:"none",background:"var(--bg2)",boxSizing:"border-box"}}/>
               </div>
               <button onClick={()=>removeLine(idx)} disabled={lines.length===1}
                 style={{padding:"8px",borderRadius:8,border:"none",background:lines.length===1?"#f1f5f9":"#fee2e2",color:lines.length===1?"#cbd5e1":"#b91c1c",cursor:lines.length===1?"not-allowed":"pointer",fontSize:15,fontWeight:700,alignSelf:"end"}}>×</button>
@@ -330,8 +436,8 @@ const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
         <Inp label="Descuento (COP)" type="number" value={discount} onChange={e=>setDiscount(e.target.value)} placeholder="0"/>
       </div>
 
-      <div style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,margin:"6px 0 8px"}}>🛵 Domicilio (opcional)</div>
-      <div style={{background:"#f8fafc",borderRadius:9,padding:"12px",border:"1.5px solid #e2e8f0"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,margin:"6px 0 8px"}}>🛵 Domicilio (opcional)</div>
+      <div style={{background:"var(--input-bg)",borderRadius:9,padding:"12px",border:"1.5px solid var(--border)"}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
           <Inp label="Nombre cliente" value={delivery.name}    onChange={e=>setDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
           <Inp label="Teléfono"       value={delivery.phone}   onChange={e=>setDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
@@ -403,23 +509,23 @@ const OrderCard = ({order,db,onEdit,onAdvance,onCancel,onPDF}) => {
   const sc     = ORDER_STATE_COLORS[order.state]||ORDER_STATE_COLORS["Pendiente"];
 
   return (
-    <div style={{background:"#fff",borderRadius:13,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginBottom:10,overflow:"hidden",border:`1.5px solid ${sc.dot}22`}}>
+    <div style={{background:"var(--bg2)",borderRadius:13,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginBottom:10,overflow:"hidden",border:`1.5px solid ${sc.dot}22`}}>
       {/* Header */}
       <div style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",gap:10}} onClick={()=>setExpanded(e=>!e)}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
-            <span style={{fontWeight:800,fontSize:14,color:"#0f172a"}}>Pedido #{String(order.id).padStart(4,"0")}</span>
+            <span style={{fontWeight:800,fontSize:14,color:"var(--text)"}}>Pedido #{String(order.id).padStart(4,"0")}</span>
             <div style={{background:sc.bg,color:sc.text,padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>● {order.state}</div>
           </div>
-          <div style={{fontSize:12,color:"#64748b"}}>
+          <div style={{fontSize:12,color:"var(--text4)"}}>
             {client?`👤 ${client.name}`:"Sin cliente"}
             {pm?` · ${pm.icon} ${pm.name}`:""}
           </div>
-          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{order.createdAt}</div>
+          <div style={{fontSize:11,color:"var(--text3)",marginTop:2}}>{order.createdAt}</div>
         </div>
         <div style={{textAlign:"right",flexShrink:0}}>
-          <div style={{fontWeight:900,fontSize:16,color:"#0f172a"}}>{formatCOP(order.total)}</div>
-          <div style={{fontSize:10,color:"#94a3b8"}}>{expanded?"▲":"▼"}</div>
+          <div style={{fontWeight:900,fontSize:16,color:"var(--text)"}}>{formatCOP(order.total)}</div>
+          <div style={{fontSize:10,color:"var(--text3)"}}>{expanded?"▲":"▼"}</div>
         </div>
       </div>
 
@@ -432,21 +538,21 @@ const OrderCard = ({order,db,onEdit,onAdvance,onCancel,onPDF}) => {
               if(!prod) return null;
               return (
                 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}>
-                  <span style={{color:"#334155"}}>{prod.name} <span style={{color:"#94a3b8",fontSize:11}}>×{line.qty}</span></span>
+                  <span style={{color:"var(--text)"}}>{prod.name} <span style={{color:"var(--text3)",fontSize:11}}>×{line.qty}</span></span>
                   <span style={{fontWeight:700}}>{formatCOP(prod.price*Number(line.qty))}</span>
                 </div>
               );
             })}
             {order.discount>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:12,color:"#b91c1c"}}><span>Descuento</span><span>-{formatCOP(order.discount)}</span></div>}
-            {order.delivery?.value>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:12,color:"#64748b"}}><span>🛵 Domicilio</span><span>{formatCOP(order.delivery.value)}</span></div>}
+            {order.delivery?.value>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:12,color:"var(--text4)"}}><span>🛵 Domicilio</span><span>{formatCOP(order.delivery.value)}</span></div>}
           </div>
 
           {/* Domicilio info */}
           {order.delivery?.name&&(
-            <div style={{background:"#f8fafc",borderRadius:8,padding:"8px 10px",marginBottom:10,fontSize:12}}>
-              <div style={{fontWeight:700,color:"#0f172a"}}>{order.delivery.name}</div>
-              {order.delivery.address&&<div style={{color:"#64748b"}}>📍 {order.delivery.address}</div>}
-              {order.delivery.phone&&<div style={{color:"#64748b"}}>📞 {order.delivery.phone}</div>}
+            <div style={{background:"var(--input-bg)",borderRadius:8,padding:"8px 10px",marginBottom:10,fontSize:12}}>
+              <div style={{fontWeight:700,color:"var(--text)"}}>{order.delivery.name}</div>
+              {order.delivery.address&&<div style={{color:"var(--text4)"}}>📍 {order.delivery.address}</div>}
+              {order.delivery.phone&&<div style={{color:"var(--text4)"}}>📞 {order.delivery.phone}</div>}
             </div>
           )}
 
@@ -484,7 +590,7 @@ const CRUDTable = ({title,icon,items,columns,renderForm,emptyText,onAdd,onEdit,o
       </div>
       <div style={s.toolbar}>
         <div style={s.searchW}>
-          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:14}}>🔍</span>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--text3)",fontSize:14}}>🔍</span>
           <input style={s.searchI} placeholder="Buscar…" value={search} onChange={e=>setSearch(e.target.value)}/>
         </div>
       </div>
@@ -619,7 +725,7 @@ const ProductConfigForm = ({initial, onSave, onClose, categories, providers, exi
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
         <Inp label="Nombre *"       value={f.name}  onChange={handleNameChange}                              placeholder="Ej: Camiseta azul"/>
         <div style={{marginBottom:12}}>
-          <label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>
+          <label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:4}}>
             SKU {!initial && <span style={{fontSize:10,color:"#6366f1",fontWeight:500}}>— generado automáticamente</span>}
           </label>
           <div style={{position:"relative"}}>
@@ -657,33 +763,61 @@ const ProductConfigForm = ({initial, onSave, onClose, categories, providers, exi
   );
 };
 
-const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB}) => {
+const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB, theme, setTheme}) => {
   const [cfg, setCfg] = useState(settings);
   useEffect(() => setCfg(settings), [settings]);
+
+  const themeOptions = [
+    {key:"light",  icon:"☀️", label:"Modo claro"},
+    {key:"dark",   icon:"🌙", label:"Modo oscuro"},
+    {key:"system", icon:"💻", label:"Igual al sistema"},
+  ];
+
   return (
     <>
       <div style={s.header}><h1 style={s.title}>⚙️ Ajustes</h1></div>
+
+      {/* Apariencia */}
       <div style={s.card}>
         <div style={{padding:"18px"}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>🏪 Información del negocio</div>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"var(--text)"}}>🎨 Apariencia</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+            {themeOptions.map(t=>(
+              <button key={t.key} onClick={()=>setTheme(t.key)}
+                style={{padding:"14px 10px",borderRadius:10,border:theme===t.key?"2px solid #6366f1":"1.5px solid var(--border)",background:theme===t.key?"linear-gradient(135deg,#6366f1,#8b5cf6)":"var(--bg3)",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:"all 0.2s"}}>
+                <span style={{fontSize:22}}>{t.icon}</span>
+                <span style={{fontSize:12,fontWeight:700,color:theme===t.key?"#fff":"var(--text)"}}>{t.label}</span>
+                {theme===t.key&&<span style={{fontSize:10,color:"rgba(255,255,255,0.8)"}}>✓ Activo</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Info negocio */}
+      <div style={s.card}>
+        <div style={{padding:"18px"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"var(--text)"}}>🏪 Información del negocio</div>
           <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"0 14px"}}>
             <Inp label="Nombre del negocio" value={cfg.businessName}    onChange={e=>setCfg(c=>({...c,businessName:e.target.value}))}    placeholder="Mi Negocio"/>
             <Inp label="Teléfono"           value={cfg.businessPhone}   onChange={e=>setCfg(c=>({...c,businessPhone:e.target.value}))}   placeholder="+57 300…"/>
           </div>
           <Inp label="Dirección"            value={cfg.businessAddress} onChange={e=>setCfg(c=>({...c,businessAddress:e.target.value}))} placeholder="Cra 5 #10-20, Ciudad"/>
-          <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>📦 Inventario</div>
+          <div style={{height:1,background:"var(--border)",margin:"14px 0"}}/>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"var(--text)"}}>📦 Inventario</div>
           <Inp label={`Umbral stock bajo (actual: ${cfg.lowStockThreshold})`} type="number"
             value={cfg.lowStockThreshold} onChange={e=>setCfg(c=>({...c,lowStockThreshold:Number(e.target.value)}))} placeholder="5"/>
-          <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
+          <div style={{height:1,background:"var(--border)",margin:"14px 0"}}/>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
             <Btn onClick={async()=>{ try{ await saveSettings(cfg); alert("✅ Ajustes guardados"); }catch(e){ alert(e.message); } }}>💾 Guardar ajustes</Btn>
           </div>
         </div>
       </div>
+
+      {/* Zona de peligro */}
       <div style={{...s.card,padding:"14px 18px",marginTop:14}}>
         <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#b91c1c"}}>⚠️ Zona de peligro</div>
-        <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Elimina todos los datos. Esta acción no se puede deshacer.</div>
+        <div style={{fontSize:12,color:"var(--text4)",marginBottom:10}}>Elimina todos los datos. Esta acción no se puede deshacer.</div>
         <Btn variant="danger" onClick={async()=>{ if(confirm("¿Seguro? Esto borrará TODOS los datos permanentemente.")) await resetDB(); }}>🗑️ Reiniciar base de datos</Btn>
       </div>
     </>
@@ -695,7 +829,9 @@ const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB}) => {
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
   const isMobile = useIsMobile();
-  useEffect(()=>lockViewport(),[]);
+  useEffect(()=>{ lockViewport(); injectGlobalCSS(); },[]);
+
+  const { theme, setTheme } = useTheme();
 
   // ── Supabase DB hook ────────────────────────────────────────
   const {
@@ -771,20 +907,20 @@ export default function App() {
 
   // ── Loading / Error screens ──────────────────────────────────
   if (loading) return (
-    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+    <div style={{minHeight:"100vh",background:"var(--bg4)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
       <div style={{fontSize:48}}>📦</div>
-      <div style={{fontSize:20,fontWeight:800,color:"#0f172a"}}>InvenPro</div>
-      <div style={{fontSize:14,color:"#64748b"}}>Conectando con la base de datos…</div>
+      <div style={{fontSize:20,fontWeight:800,color:"var(--text)"}}>InvenPro</div>
+      <div style={{fontSize:14,color:"var(--text4)"}}>Conectando con la base de datos…</div>
       <div style={{width:40,height:40,border:"4px solid #e2e8f0",borderTop:"4px solid #6366f1",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 
   if (error) return (
-    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24}}>
+    <div style={{minHeight:"100vh",background:"var(--bg4)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24}}>
       <div style={{fontSize:48}}>⚠️</div>
       <div style={{fontSize:18,fontWeight:800,color:"#b91c1c"}}>Error de conexión</div>
-      <div style={{fontSize:13,color:"#64748b",textAlign:"center",maxWidth:360}}>{error}</div>
+      <div style={{fontSize:13,color:"var(--text4)",textAlign:"center",maxWidth:360}}>{error}</div>
       <div style={{background:"#fee2e2",borderRadius:10,padding:"12px 18px",fontSize:12,color:"#7f1d1d",maxWidth:400}}>
         Verifica que las variables <strong>VITE_SUPABASE_URL</strong> y <strong>VITE_SUPABASE_ANON_KEY</strong> estén configuradas correctamente en tu archivo <strong>.env</strong>
       </div>
@@ -796,9 +932,9 @@ export default function App() {
   //  RENDER
   // ═══════════════════════════════════════════════════════════
   return (
-    <div style={{minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Segoe UI',sans-serif",color:"#0f172a"}}>
+    <div style={{minHeight:"100vh",background:"var(--bg4)",fontFamily:"'Segoe UI',sans-serif",color:"var(--text)"}}>
 
-      <Sidebar tab={tab} setTab={setTab} db={db} sideOpen={sideOpen} setSideOpen={setSideOpen} isMobile={isMobile}/>
+      <Sidebar tab={tab} setTab={setTab} db={db} sideOpen={sideOpen} setSideOpen={setSideOpen} isMobile={isMobile} theme={theme} setTheme={setTheme}/>
 
       <main style={s.main}>
 
@@ -806,7 +942,7 @@ export default function App() {
         {isMobile&&(
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <button onClick={()=>setSideOpen(true)} style={{background:"#0f172a",border:"none",borderRadius:9,width:36,height:36,cursor:"pointer",color:"#fff",fontSize:18}}>☰</button>
-            <div style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>{tab}</div>
+            <div style={{fontWeight:800,fontSize:15,color:"var(--text)"}}>{tab}</div>
             <div style={{width:36}}/>
           </div>
         )}
@@ -834,7 +970,7 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
               {/* Pedidos recientes */}
               <div style={s.card}>
-                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span>🛒 Pedidos recientes</span>
                   <button onClick={()=>setTab("Pedidos")} style={{fontSize:11,color:"#6366f1",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>Ver todos →</button>
                 </div>
@@ -843,7 +979,7 @@ export default function App() {
                     const sc=ORDER_STATE_COLORS[o.state]||ORDER_STATE_COLORS["Pendiente"];
                     const client=db.clients.find(c=>c.id===Number(o.clientId));
                     return (
-                      <div key={o.id} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div key={o.id} style={{padding:"10px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                         <div>
                           <div style={{fontWeight:700,fontSize:13}}>#{String(o.id).padStart(4,"0")} {client?`· ${client.name}`:""}</div>
                           <div style={{background:sc.bg,color:sc.text,padding:"1px 8px",borderRadius:20,fontSize:10,fontWeight:700,display:"inline-block",marginTop:3}}>● {o.state}</div>
@@ -857,14 +993,14 @@ export default function App() {
 
               {/* Stock bajo */}
               <div style={s.card}>
-                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span>🔔 Stock bajo</span>
                   {lowStock.length>0&&<Badge color="red">{lowStock.length}</Badge>}
                 </div>
                 {lowStock.length===0?<EmptyState icon="✅" text="Todo el stock está OK"/>:
                   lowStock.map(p=>(
-                    <div key={p.id} style={{padding:"9px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                    <div key={p.id} style={{padding:"9px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{p.sku}</div></div>
                       <Badge color={p.stock===0?"red":"yellow"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
                     </div>
                   ))
@@ -889,7 +1025,7 @@ export default function App() {
                 const sc=ORDER_STATE_COLORS[st]||{bg:"#f1f5f9",text:"#334155"};
                 return (
                   <button key={st} onClick={()=>setTab("Pedidos:"+st)}
-                    style={{padding:"6px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#fff",color:"#334155",cursor:"pointer",fontSize:12,fontWeight:600}}>
+                    style={{padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--border)",background:"var(--bg2)",color:"var(--text)",cursor:"pointer",fontSize:12,fontWeight:600}}>
                     {st} <span style={{background:sc.bg,color:sc.text,padding:"1px 6px",borderRadius:20,fontSize:10,fontWeight:800,marginLeft:4}}>{count}</span>
                   </button>
                 );
@@ -915,7 +1051,7 @@ export default function App() {
             <div style={s.header}><h1 style={s.title}>📦 Inventario</h1><Btn onClick={()=>openMovModal()}>🔄 Movimiento</Btn></div>
             <div style={s.toolbar}>
               <div style={s.searchW}>
-                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:14}}>🔍</span>
+                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--text3)",fontSize:14}}>🔍</span>
                 <input style={s.searchI} placeholder="Buscar producto…" id="inv-search"/>
               </div>
             </div>
@@ -926,15 +1062,15 @@ export default function App() {
                   const prov=db.providers.find(v=>v.id===p.providerId);
                   const sc=p.stock===0?"red":p.stock<=(db.settings.lowStockThreshold||5)?"yellow":"green";
                   return (
-                    <div key={p.id} style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+                    <div key={p.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:700,fontSize:14}}>{p.name}</div>
                         <div style={{fontSize:11,color:"#6366f1",fontFamily:"monospace",fontWeight:600}}>{p.sku}</div>
                         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
                           {cat&&<Badge color="blue">{cat.name}</Badge>}
-                          {prov&&<span style={{fontSize:10,color:"#94a3b8"}}>🏭 {prov.name}</span>}
+                          {prov&&<span style={{fontSize:10,color:"var(--text3)"}}>🏭 {prov.name}</span>}
                         </div>
-                        <div style={{fontSize:12,color:"#64748b",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
+                        <div style={{fontSize:12,color:"var(--text4)",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
                       </div>
                       <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
                         <Badge color={sc}>{p.stock} {p.unit}</Badge>
@@ -961,7 +1097,7 @@ export default function App() {
                       <span style={{fontSize:22}}>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}</span>
                       <div>
                         <div style={{fontWeight:700,fontSize:13}}>{m.productName}</div>
-                        <div style={{fontSize:10,color:"#94a3b8"}}>{m.date}{m.note?` · ${m.note}`:""}</div>
+                        <div style={{fontSize:10,color:"var(--text3)"}}>{m.date}{m.note?` · ${m.note}`:""}</div>
                       </div>
                     </div>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
@@ -1015,13 +1151,13 @@ export default function App() {
               db.deliveries.map(d=>(
                 <div key={d.id} style={{...s.card,padding:"12px 16px"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
-                    <div><div style={{fontWeight:700,fontSize:14}}>{d.name}</div>{d.phone&&<div style={{fontSize:11,color:"#64748b"}}>{d.phone}</div>}{d.address&&<div style={{fontSize:11,color:"#64748b"}}>📍 {d.address}</div>}</div>
-                    <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:15,color:"#6366f1"}}>{formatCOP(d.value)}</div><div style={{fontSize:10,color:"#94a3b8"}}>domicilio</div></div>
+                    <div><div style={{fontWeight:700,fontSize:14}}>{d.name}</div>{d.phone&&<div style={{fontSize:11,color:"var(--text4)"}}>{d.phone}</div>}{d.address&&<div style={{fontSize:11,color:"var(--text4)"}}>📍 {d.address}</div>}</div>
+                    <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:15,color:"#6366f1"}}>{formatCOP(d.value)}</div><div style={{fontSize:10,color:"var(--text3)"}}>domicilio</div></div>
                   </div>
-                  <div style={{display:"flex",gap:12,fontSize:12,color:"#64748b",flexWrap:"wrap"}}>
-                    <span>Pedido: <strong style={{color:"#0f172a"}}>{formatCOP(d.orderValue)}</strong></span>
+                  <div style={{display:"flex",gap:12,fontSize:12,color:"var(--text4)",flexWrap:"wrap"}}>
+                    <span>Pedido: <strong style={{color:"var(--text)"}}>{formatCOP(d.orderValue)}</strong></span>
                     {d.discount>0&&<span>Desc: <strong style={{color:"#b91c1c"}}>-{formatCOP(d.discount)}</strong></span>}
-                    <span style={{color:"#94a3b8"}}>{d.date}</span>
+                    <span style={{color:"var(--text3)"}}>{d.date}</span>
                   </div>
                 </div>
               ))
@@ -1039,7 +1175,7 @@ export default function App() {
                 <div style={s.card}>
                   {lowStock.filter(p=>p.stock===0).map(p=>(
                     <div key={p.id} style={{padding:"11px 16px",borderBottom:"1px solid #fee2e2",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                      <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{p.sku}</div></div>
                       <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color="red">Agotado</Badge><Btn size="sm" onClick={()=>openMovModal(p)}>Reponer</Btn></div>
                     </div>
                   ))}
@@ -1052,7 +1188,7 @@ export default function App() {
                 <div style={s.card}>
                   {lowStock.filter(p=>p.stock>0).map(p=>(
                     <div key={p.id} style={{padding:"11px 16px",borderBottom:"1px solid #fef9c3",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                      <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{p.sku}</div></div>
                       <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color="yellow">{p.stock} {p.unit}</Badge><Btn size="sm" onClick={()=>openMovModal(p)}>Reponer</Btn></div>
                     </div>
                   ))}
@@ -1085,25 +1221,25 @@ export default function App() {
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
                   <div style={s.card}>
-                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9"}}>🏆 Top 5 más vendidos</div>
+                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)"}}>🏆 Top 5 más vendidos</div>
                     {top.length===0?<EmptyState icon="📊" text="Sin ventas aún"/>:top.map((item,i)=>(
-                      <div key={i} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9"}}>
+                      <div key={i} style={{padding:"10px 16px",borderBottom:"1px solid var(--bg4)"}}>
                         <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
                           <div style={{display:"flex",gap:8,alignItems:"center"}}>
                             <span style={{background:i===0?"#fef9c3":"#f1f5f9",color:i===0?"#a16207":"#64748b",width:20,height:20,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800}}>{i+1}</span>
                             <span style={{fontWeight:700,fontSize:13}}>{item.name}</span>
                           </div>
-                          <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:13,color:"#b91c1c"}}>{item.qty} und</div><div style={{fontSize:10,color:"#64748b"}}>{formatCOP(item.val)}</div></div>
+                          <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:13,color:"#b91c1c"}}>{item.qty} und</div><div style={{fontSize:10,color:"var(--text4)"}}>{formatCOP(item.val)}</div></div>
                         </div>
-                        <div style={{height:5,background:"#f1f5f9",borderRadius:10}}><div style={{width:`${(item.qty/maxQ)*100}%`,height:"100%",background:i===0?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#6366f1,#8b5cf6)",borderRadius:10}}/></div>
+                        <div style={{height:5,background:"var(--bg4)",borderRadius:10}}><div style={{width:`${(item.qty/maxQ)*100}%`,height:"100%",background:i===0?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#6366f1,#8b5cf6)",borderRadius:10}}/></div>
                       </div>
                     ))}
                   </div>
                   <div style={s.card}>
-                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9"}}>🐢 Baja rotación ({sinMov.length})</div>
+                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)"}}>🐢 Baja rotación ({sinMov.length})</div>
                     {sinMov.length===0?<EmptyState icon="✅" text="Todos los productos se han vendido"/>:sinMov.map(p=>(
-                      <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                      <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{p.sku}</div></div>
                         <Badge color={p.stock===0?"red":p.stock<=5?"yellow":"gray"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
                       </div>
                     ))}
@@ -1160,6 +1296,8 @@ export default function App() {
             s={s}
             saveSettings={saveSettings}
             resetDB={resetDB}
+            theme={theme}
+            setTheme={setTheme}
           />
         )}
 
@@ -1203,25 +1341,25 @@ export default function App() {
           </div>
 
           {/* Productos */}
-          <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>📦 Productos</div>
+          <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>📦 Productos</div>
           {movLines.map((line,idx)=>{
             const prod=db.products.find(p=>p.id===Number(line.productId));
             return (
-              <div key={idx} style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:8}}>
+              <div key={idx} style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:8}}>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 80px 30px",gap:8,alignItems:"end"}}>
                   <div>
-                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Producto</label>
+                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--text4)",marginBottom:3}}>Producto</label>
                     <select value={line.productId} onChange={e=>{ const nl=[...movLines]; nl[idx]={...nl[idx],productId:e.target.value}; setMovLines(nl); }}
-                      style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"#fff",outline:"none"}}>
+                      style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"var(--bg2)",outline:"none"}}>
                       <option value="">— Selecciona —</option>
                       {db.products.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stock} {p.unit}</option>)}
                     </select>
                     {prod&&<div style={{fontSize:10,color:"#6366f1",fontWeight:600,marginTop:3}}>{prod.sku} · {formatCOP(prod.price)} · Stock: {prod.stock}</div>}
                   </div>
                   <div>
-                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Cant.</label>
+                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--text4)",marginBottom:3}}>Cant.</label>
                     <input type="number" value={line.qty} onChange={e=>{ const nl=[...movLines]; nl[idx]={...nl[idx],qty:e.target.value}; setMovLines(nl); }} placeholder="0"
-                      style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,fontWeight:700,color:"#0f172a",outline:"none",background:"#fff",boxSizing:"border-box"}}/>
+                      style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,fontWeight:700,color:"var(--text)",outline:"none",background:"var(--bg2)",boxSizing:"border-box"}}/>
                   </div>
                   <button onClick={()=>setMovLines(l=>l.filter((_,i)=>i!==idx))} disabled={movLines.length===1}
                     style={{padding:"8px",borderRadius:8,border:"none",background:movLines.length===1?"#f1f5f9":"#fee2e2",color:movLines.length===1?"#cbd5e1":"#b91c1c",cursor:movLines.length===1?"not-allowed":"pointer",fontSize:15,fontWeight:700,alignSelf:"end"}}>×</button>
@@ -1236,8 +1374,8 @@ export default function App() {
             <Inp label="Descuento" type="number" value={movDiscount} onChange={e=>setMovDiscount(e.target.value)} placeholder="0"/>
           </div>
 
-          <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
-          <div style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
+          <div style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:10}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
               <Inp label="Cliente" value={movDelivery.name}    onChange={e=>setMovDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
               <Inp label="Teléfono" value={movDelivery.phone}  onChange={e=>setMovDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
