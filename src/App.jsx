@@ -220,6 +220,49 @@ const injectGlobalCSS = () => {
 };
 
 
+// ═══════════════════════════════════════════════════════════════
+//  PUSH NOTIFICATIONS — cada 8 horas
+// ═══════════════════════════════════════════════════════════════
+const NOTIFY_INTERVAL = 8 * 60 * 60 * 1000;
+const NOTIFY_TS_KEY   = "invenpro_last_notify";
+
+const useNotifications = (db) => {
+  const [permission, setPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "default"
+  );
+
+  const requestPermission = async () => {
+    if (typeof Notification === "undefined") return "denied";
+    const result = await Notification.requestPermission();
+    setPermission(result);
+    return result;
+  };
+
+  const sendAlerts = useCallback(() => {
+    if (permission !== "granted") return;
+    if (!("serviceWorker" in navigator)) return;
+    const threshold = db.settings.lowStockThreshold || 5;
+    const lowStock  = db.products.filter(p => p.stock <= threshold).map(p => ({ name:p.name, stock:p.stock, unit:p.unit }));
+    const pendingOrders = db.orders.filter(o => o.state === "Pendiente").length;
+    if (lowStock.length === 0 && pendingOrders === 0) return;
+    navigator.serviceWorker.ready.then(reg => {
+      reg.active?.postMessage({ type:"CHECK_ALERTS", payload:{ lowStock, pendingOrders, threshold } });
+    });
+    localStorage.setItem(NOTIFY_TS_KEY, Date.now().toString());
+  }, [permission, db.products, db.orders, db.settings.lowStockThreshold]);
+
+  useEffect(() => {
+    if (permission !== "granted" || db.products.length === 0) return;
+    const last  = Number(localStorage.getItem(NOTIFY_TS_KEY) || 0);
+    const delay = Date.now() - last >= NOTIFY_INTERVAL ? 0 : NOTIFY_INTERVAL - (Date.now() - last);
+    const t = setTimeout(() => { sendAlerts(); }, delay);
+    const iv = setInterval(sendAlerts, NOTIFY_INTERVAL);
+    return () => { clearTimeout(t); clearInterval(iv); };
+  }, [permission, sendAlerts, db.products.length]);
+
+  return { permission, requestPermission, sendAlerts };
+};
+
 const ORDER_STATES = ["Pendiente", "En proceso", "Enviado", "Entregado"];
 const ORDER_STATE_COLORS = {
   "Pendiente":   { bg:"#fef9c3", text:"#a16207", dot:"#f59e0b" },
@@ -959,7 +1002,7 @@ const ProductConfigForm = ({initial, onSave, onClose, categories, providers, exi
   );
 };
 
-const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB, theme, setTheme}) => {
+const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB, theme, setTheme, notifPermission, onRequestNotif, onTestNotif}) => {
   const [cfg, setCfg] = useState(settings);
   useEffect(() => setCfg(settings), [settings]);
 
@@ -986,6 +1029,53 @@ const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB, theme, setTh
                 {theme===t.key&&<span style={{fontSize:10,color:"rgba(255,255,255,0.8)"}}>✓ Activo</span>}
               </button>
             ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Notificaciones */}
+      <div style={s.card}>
+        <div style={{padding:"18px"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:"var(--text)"}}>🔔 Notificaciones push</div>
+          <div style={{fontSize:12,color:"var(--text4)",marginBottom:14,lineHeight:1.5}}>
+            Recibe alertas de stock bajo y pedidos pendientes directamente en tu teléfono, cada 8 horas.
+          </div>
+
+          {/* Estado actual */}
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:12,background:"var(--bg3)",border:"1px solid var(--border)",marginBottom:12}}>
+            <span style={{fontSize:28}}>
+              {notifPermission==="granted" ? "✅" : notifPermission==="denied" ? "🚫" : "🔕"}
+            </span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13,color:"var(--text)"}}>
+                {notifPermission==="granted" ? "Notificaciones activas" : notifPermission==="denied" ? "Notificaciones bloqueadas" : "Notificaciones desactivadas"}
+              </div>
+              <div style={{fontSize:11,color:"var(--text4)",marginTop:2}}>
+                {notifPermission==="granted"
+                  ? "Recibirás alertas automáticas cada 8 horas"
+                  : notifPermission==="denied"
+                  ? "Ve a ajustes del navegador para permitirlas"
+                  : "Toca el botón para activarlas"}
+              </div>
+            </div>
+            {/* Indicador visual */}
+            {notifPermission==="granted" && (
+              <div style={{width:10,height:10,borderRadius:"50%",background:"var(--success,#34c759)",boxShadow:"0 0 6px rgba(52,199,89,0.5)"}}/>
+            )}
+          </div>
+
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {notifPermission !== "granted" && notifPermission !== "denied" && (
+              <Btn onClick={onRequestNotif}>🔔 Activar notificaciones</Btn>
+            )}
+            {notifPermission === "granted" && (
+              <Btn variant="secondary" onClick={onTestNotif}>📣 Probar ahora</Btn>
+            )}
+            {notifPermission === "denied" && (
+              <div style={{fontSize:12,color:"var(--text4)",padding:"8px 0",lineHeight:1.5}}>
+                Para activarlas: ve al ícono de 🔒 en la barra del navegador → Permisos → Notificaciones → Permitir.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1042,6 +1132,9 @@ export default function App() {
     saveSettings,
     resetDB,
   } = useDB();
+
+  // ── Notificaciones push ─────────────────────────────────────
+  const { permission, requestPermission, sendAlerts } = useNotifications(db);
 
   const [tab, setTab] = useState("Dashboard");
   const [sideOpen, setSideOpen] = useState(false);
@@ -1149,6 +1242,31 @@ export default function App() {
     <div style={{minHeight:"100vh",background:"var(--bg4)",fontFamily:"'Segoe UI',sans-serif",color:"var(--text)"}}>
 
       <Sidebar tab={tab} setTab={setTab} db={db} sideOpen={sideOpen} setSideOpen={setSideOpen} isMobile={isMobile} theme={theme} setTheme={setTheme}/>
+
+      {/* ── Banner de permiso de notificaciones ── */}
+      {permission === "default" && !loading && db.products.length > 0 && (
+        <div style={{
+          position:"fixed", bottom: isMobile ? 90 : 20, left: isMobile ? 12 : "auto",
+          right: isMobile ? 12 : 240, zIndex:2000,
+          background:"var(--bg2)", borderRadius:16,
+          boxShadow:"0 4px 24px rgba(0,0,0,0.15)",
+          border:"1px solid var(--border)",
+          padding:"14px 16px",
+          display:"flex", alignItems:"center", gap:12,
+          maxWidth:380,
+          animation:"fadeUp .3s ease",
+        }}>
+          <span style={{fontSize:28,flexShrink:0}}>🔔</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:2}}>Activar alertas</div>
+            <div style={{fontSize:12,color:"var(--text4)",lineHeight:1.4}}>Recibe notificaciones de stock bajo y pedidos pendientes cada 8 horas</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,flexShrink:0}}>
+            <Btn size="sm" onClick={async()=>{ const r=await requestPermission(); if(r==="granted") sendAlerts(); }}>Activar</Btn>
+            <Btn size="sm" variant="ghost" onClick={()=>localStorage.setItem(NOTIFY_TS_KEY,"dismissed")} style={{fontSize:11,color:"var(--text3)"}}>Ahora no</Btn>
+          </div>
+        </div>
+      )}
 
       <main style={{...s.main, paddingTop: isMobile ? "16px" : undefined}}>
 
@@ -1586,6 +1704,9 @@ export default function App() {
             resetDB={resetDB}
             theme={theme}
             setTheme={setTheme}
+            notifPermission={permission}
+            onRequestNotif={async()=>{ const r=await requestPermission(); if(r==="granted") sendAlerts(); }}
+            onTestNotif={sendAlerts}
           />
         )}
 
