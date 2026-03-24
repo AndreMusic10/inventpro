@@ -562,7 +562,7 @@ const OrderCard = ({order,db,onEdit,onAdvance,onCancel,onPDF}) => {
           {/* Acciones */}
           <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
             <Btn size="sm" variant="secondary" onClick={()=>onEdit(order)}>✏️ Editar</Btn>
-            {order.state==="Entregado"&&<Btn size="sm" variant="secondary" onClick={()=>onPDF(order)}>📄 Factura PDF</Btn>}
+            {(order.state==="Enviado"||order.state==="Entregado")&&<Btn size="sm" variant="secondary" onClick={()=>onPDF(order)}>📄 Factura PDF</Btn>}
           </div>
         </div>
       )}
@@ -879,6 +879,8 @@ export default function App() {
 
   const [tab, setTab] = useState("Dashboard");
   const [sideOpen, setSideOpen] = useState(false);
+  const [editProd,   setEditProd]   = useState(null);
+  const [showAddProd, setShowAddProd] = useState(false);
 
   // Modals
   const [showOrderForm,  setShowOrderForm]  = useState(false);
@@ -1081,7 +1083,20 @@ export default function App() {
               db.orders.map(o=>(
                 <OrderCard key={o.id} order={o} db={db}
                   onEdit={(order)=>{setEditingOrder(order);setShowOrderForm(true);}}
-                  onAdvance={async(id)=>{ try{await advanceOrder(id);}catch(e){alert(e.message);} }}
+                  onAdvance={async(id)=>{
+                    try {
+                      await advanceOrder(id);
+                      // Buscar el pedido actualizado para saber a qué estado pasó
+                      const order = db.orders.find(o=>o.id===id);
+                      if (!order) return;
+                      const idx = ORDER_STATES.indexOf(order.state);
+                      const nextState = ORDER_STATES[idx+1];
+                      // Generar PDF automáticamente al pasar a "Enviado"
+                      if (nextState === "Enviado") {
+                        await handleOrderPDF(order);
+                      }
+                    } catch(e) { alert(e.message); }
+                  }}
                   onCancel={(id)=>{ if(confirm("¿Cancelar este pedido?")) cancelOrder(id).catch(e=>alert(e.message)); }}
                   onPDF={handleOrderPDF}
                 />
@@ -1093,42 +1108,66 @@ export default function App() {
         {/* ─── INVENTARIO ─── */}
         {tab==="Inventario"&&(
           <>
-            <div style={s.header}><h1 style={s.title}>📦 Inventario</h1><Btn onClick={()=>openMovModal()}>🔄 Movimiento</Btn></div>
+            <div style={s.header}>
+              <h1 style={s.title}>📦 Inventario</h1>
+              <div style={{display:"flex",gap:8}}>
+                <Btn onClick={()=>openMovModal()}>🔄 Movimiento</Btn>
+                <Btn onClick={()=>setShowAddProd(true)}>+ Producto</Btn>
+              </div>
+            </div>
             <div style={s.toolbar}>
               <div style={s.searchW}>
                 <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--text3)",fontSize:14}}>🔍</span>
-                <input style={s.searchI} placeholder="Buscar producto…" id="inv-search"/>
+                <input style={s.searchI} placeholder="Buscar producto…" id="inv-search"
+                  onChange={e=>{
+                    const q=e.target.value.toLowerCase();
+                    document.querySelectorAll("[data-prod-row]").forEach(el=>{
+                      el.style.display=el.dataset.prodRow.toLowerCase().includes(q)?"":"none";
+                    });
+                  }}
+                />
               </div>
             </div>
             <div style={s.card}>
-              {db.products.length===0?<EmptyState icon="📦" text="Sin productos"/>:
+              {db.products.length===0?<EmptyState icon="📦" text="Sin productos. Crea el primero con '+ Producto'"/>:
                 db.products.map(p=>{
                   const cat=db.categories.find(c=>c.id===p.categoryId);
                   const prov=db.providers.find(v=>v.id===p.providerId);
                   const sc=p.stock===0?"red":p.stock<=(db.settings.lowStockThreshold||5)?"yellow":"green";
                   return (
-                    <div key={p.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
-                      <div style={{display:"flex",gap:12,alignItems:"flex-start",flex:1,minWidth:0}}>
-                        {/* Imagen del producto */}
-                        <div style={{width:52,height:52,borderRadius:9,border:"1.5px solid var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>
+                    <div key={p.id} data-prod-row={`${p.name} ${p.sku}`}
+                      style={{padding:"12px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                      <div style={{display:"flex",gap:12,alignItems:"center",flex:1,minWidth:0}}>
+                        {/* Imagen — clic para editar */}
+                        <div onClick={()=>setEditProd(p)}
+                          style={{width:52,height:52,borderRadius:9,border:"1.5px solid var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,cursor:"pointer",position:"relative"}}>
                           {p.image
                             ? <img src={p.image} alt={p.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                             : "📦"
                           }
+                          {/* Overlay de edición */}
+                          <div style={{position:"absolute",inset:0,background:"rgba(99,102,241,0.0)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,transition:"background 0.2s"}}
+                            onMouseEnter={e=>e.currentTarget.style.background="rgba(99,102,241,0.45)"}
+                            onMouseLeave={e=>e.currentTarget.style.background="rgba(99,102,241,0)"}
+                          >✏️</div>
                         </div>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontWeight:700,fontSize:14,color:"var(--text)"}}>{p.name}</div>
                           <div style={{fontSize:11,color:"#6366f1",fontFamily:"monospace",fontWeight:600}}>{p.sku}</div>
-                          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:3}}>
                             {cat&&<Badge color="blue">{cat.name}</Badge>}
                             {prov&&<span style={{fontSize:10,color:"var(--text3)"}}>🏭 {prov.name}</span>}
                           </div>
-                          <div style={{fontSize:12,color:"var(--text4)",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
+                          <div style={{fontSize:12,color:"var(--text4)",marginTop:3}}>
+                            Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}
+                          </div>
                         </div>
                       </div>
                       <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
                         <Badge color={sc}>{p.stock} {p.unit}</Badge>
-                        <button style={{...s.iconBtn,fontSize:14}} onClick={()=>openMovModal(p)}>🔄</button>
+                        <button style={s.iconBtn} title="Registrar movimiento" onClick={()=>openMovModal(p)}>🔄</button>
+                        <button style={s.iconBtn} title="Editar producto"      onClick={()=>setEditProd(p)}>✏️</button>
+                        <button style={s.iconBtn} title="Eliminar producto"    onClick={()=>{ if(confirm(`¿Eliminar "${p.name}"?`)) deleteProduct(p.id).catch(e=>alert(e.message)); }}>🗑️</button>
                       </div>
                     </div>
                   );
@@ -1391,6 +1430,33 @@ export default function App() {
       {showOrderForm&&(
         <Modal title={editingOrder?"Editar pedido":"Nuevo pedido"} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}} maxWidth={640}>
         <OrderForm db={db} addOrder={addOrder} editOrder={editOrder} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
+        </Modal>
+      )}
+
+      {/* ── MODAL: AGREGAR PRODUCTO (desde Inventario) ── */}
+      {showAddProd&&(
+        <Modal title="Nuevo producto" onClose={()=>setShowAddProd(false)} maxWidth={560}>
+          <ProductConfigForm
+            categories={db.categories}
+            providers={db.providers}
+            existingSkus={db.products.map(p=>p.sku)}
+            onSave={async(data)=>{ try{ await addProduct(data); setShowAddProd(false); }catch(e){ alert(e.message); } }}
+            onClose={()=>setShowAddProd(false)}
+          />
+        </Modal>
+      )}
+
+      {/* ── MODAL: EDITAR PRODUCTO (desde Inventario) ── */}
+      {editProd&&(
+        <Modal title="Editar producto" onClose={()=>setEditProd(null)} maxWidth={560}>
+          <ProductConfigForm
+            initial={editProd}
+            categories={db.categories}
+            providers={db.providers}
+            existingSkus={db.products.filter(p=>p.id!==editProd.id).map(p=>p.sku)}
+            onSave={async(data)=>{ try{ await editProduct(data); setEditProd(null); }catch(e){ alert(e.message); } }}
+            onClose={()=>setEditProd(null)}
+          />
         </Modal>
       )}
 
