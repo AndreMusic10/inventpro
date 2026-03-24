@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useDB } from "./useDB";
 
 // ═══════════════════════════════════════════════════════════════
 //  VIEWPORT LOCK
@@ -13,71 +14,6 @@ const useIsMobile = () => {
   const [mob, setMob] = useState(window.innerWidth < 768);
   useEffect(() => { const h = () => setMob(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   return mob;
-};
-
-// ═══════════════════════════════════════════════════════════════
-//  DATABASE  (state-based, in-memory with localStorage persistence)
-// ═══════════════════════════════════════════════════════════════
-const DB_KEY = "invenpro_db";
-
-const defaultDB = {
-  products: [
-    { id:1, name:"Audífonos Bluetooth", sku:"ELEC-001", categoryId:1, providerId:1, price:350000, cost:180000, stock:12, unit:"und", description:"Audífonos inalámbricos con cancelación de ruido" },
-    { id:2, name:"Camiseta Básica",     sku:"ROPA-001", categoryId:2, providerId:2, price:45000,  cost:18000,  stock:3,  unit:"und", description:"Camiseta 100% algodón talla M" },
-    { id:3, name:"Arroz Premium 5kg",   sku:"ALIM-001", categoryId:3, providerId:1, price:28000,  cost:20000,  stock:30, unit:"kg",  description:"Arroz de grano largo premium" },
-    { id:4, name:"Lámpara LED",         sku:"HOG-001",  categoryId:4, providerId:3, price:65000,  cost:32000,  stock:2,  unit:"und", description:"Lámpara de escritorio LED regulable" },
-  ],
-  categories: [
-    { id:1, name:"Electrónica" },
-    { id:2, name:"Ropa" },
-    { id:3, name:"Alimentos" },
-    { id:4, name:"Hogar" },
-    { id:5, name:"Otro" },
-  ],
-  clients: [
-    { id:1, name:"Juan Pérez",    phone:"300-1111111", email:"juan@mail.com",    address:"Cra 5 #10-20, Barranquilla" },
-    { id:2, name:"María García",  phone:"301-2222222", email:"maria@mail.com",   address:"Cll 72 #46-30, Bogotá" },
-  ],
-  providers: [
-    { id:1, name:"TechDistrib S.A.S", phone:"605-3001001", email:"ventas@techdistrib.co", contact:"Carlos Ríos",   notes:"Entrega en 3 días hábiles" },
-    { id:2, name:"TextilAndes",       phone:"604-3002002", email:"pedidos@textilandes.co", contact:"Ana Torres",   notes:"Mínimo 10 unidades" },
-    { id:3, name:"LumiCo",            phone:"601-3003003", email:"info@lumico.co",          contact:"Pedro Soto",  notes:"Pago anticipado" },
-  ],
-  paymentMethods: [
-    { id:1, name:"Efectivo",         icon:"💵" },
-    { id:2, name:"Tarjeta débito",   icon:"💳" },
-    { id:3, name:"Tarjeta crédito",  icon:"💳" },
-    { id:4, name:"Transferencia",    icon:"🏦" },
-    { id:5, name:"Nequi / Daviplata",icon:"📱" },
-  ],
-  orders: [],
-  movements: [],
-  deliveries: [],
-  settings: {
-    businessName: "Mi Negocio",
-    businessPhone: "",
-    businessAddress: "",
-    lowStockThreshold: 5,
-    currency: "COP",
-  },
-  _seq: { product:5, category:6, client:3, provider:4, paymentMethod:6, order:1, movement:1, delivery:1 },
-};
-
-const loadDB = () => {
-  try {
-    const raw = localStorage.getItem(DB_KEY);
-    if (raw) return { ...defaultDB, ...JSON.parse(raw) };
-  } catch {}
-  return defaultDB;
-};
-
-const saveDB = (db) => {
-  try { localStorage.setItem(DB_KEY, JSON.stringify(db)); } catch {}
-};
-
-const nextSeq = (db, key) => {
-  const id = db._seq[key];
-  return { id, db: { ...db, _seq: { ...db._seq, [key]: id + 1 } } };
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -325,7 +261,7 @@ const makeStyles = (isMobile) => ({
 // ═══════════════════════════════════════════════════════════════
 //  ORDERS MODULE
 // ═══════════════════════════════════════════════════════════════
-const OrderForm = ({db,setDB,onClose,initial}) => {
+const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
   const [lines,   setLines]   = useState(initial?.items||[{productId:"",qty:""}]);
   const [clientId,setClientId]= useState(initial?.clientId||"");
   const [pmId,    setPmId]    = useState(initial?.paymentMethodId||"");
@@ -343,14 +279,13 @@ const OrderForm = ({db,setDB,onClose,initial}) => {
   const disc = Number(discount)||0;
   const total = subtotal-disc+dv;
 
-  const handleSave = ()=>{
+  const handleSave = async ()=>{
     if(resolved.length===0) return alert("Agrega al menos un producto.");
-    if(initial){
-      setDB(db=>{ const d={...db,orders:db.orders.map(o=>o.id===initial.id?{...o,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total,updatedAt:nowStr()}:o)}; saveDB(d); return d; });
-    } else {
-      setDB(db=>{ const {id,db:d2}=nextSeq(db,"order"); const order={id,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total,state:"Pendiente",createdAt:nowStr(),updatedAt:nowStr()}; const d3={...d2,orders:[order,...d2.orders]}; saveDB(d3); return d3; });
-    }
-    onClose();
+    try {
+      if(initial){ await editOrder({...initial,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total}); }
+      else { await addOrder({clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total}); }
+      onClose();
+    } catch(e) { alert("Error: " + e.message); }
   };
 
   return (
@@ -586,13 +521,196 @@ const CRUDTable = ({title,icon,items,columns,renderForm,emptyText,onAdd,onEdit,o
 };
 
 // ═══════════════════════════════════════════════════════════════
+//  FORM COMPONENTS (must be top-level to follow Rules of Hooks)
+// ═══════════════════════════════════════════════════════════════
+
+const CategoryForm = ({initial, onSave, onClose}) => {
+  const [name, setName] = useState(initial?.name || "");
+  return (
+    <div>
+      <Inp label="Nombre *" value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Bebidas"/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={()=>{if(!name.trim())return alert("Nombre requerido"); onSave({...initial,name:name.trim()});}}>Guardar</Btn>
+      </div>
+    </div>
+  );
+};
+
+const ProviderForm = ({initial, onSave, onClose}) => {
+  const [f, setF] = useState(initial || {name:"",contact:"",phone:"",email:"",notes:""});
+  const set = (k,v) => setF(x=>({...x,[k]:v}));
+  return (
+    <div>
+      <Inp label="Nombre empresa *" value={f.name}    onChange={e=>set("name",e.target.value)}    placeholder="TechDistrib S.A.S"/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+        <Inp label="Contacto" value={f.contact} onChange={e=>set("contact",e.target.value)} placeholder="Carlos Ríos"/>
+        <Inp label="Teléfono" value={f.phone}   onChange={e=>set("phone",e.target.value)}   placeholder="605-3001001"/>
+        <Inp label="Email"    value={f.email}   onChange={e=>set("email",e.target.value)}   placeholder="ventas@empresa.co"/>
+      </div>
+      <Inp label="Notas" value={f.notes} onChange={e=>set("notes",e.target.value)} placeholder="Ej: Mínimo 10 unidades…"/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido"); onSave({...initial,...f});}}>Guardar</Btn>
+      </div>
+    </div>
+  );
+};
+
+const PaymentMethodForm = ({initial, onSave, onClose}) => {
+  const [f, setF] = useState(initial || {name:"",icon:"💳"});
+  const set = (k,v) => setF(x=>({...x,[k]:v}));
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"80px 1fr",gap:"0 12px"}}>
+        <Inp label="Ícono"    value={f.icon} onChange={e=>set("icon",e.target.value)} placeholder="💵"/>
+        <Inp label="Nombre *" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Efectivo"/>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido"); onSave({...initial,...f});}}>Guardar</Btn>
+      </div>
+    </div>
+  );
+};
+
+// ── Generador de SKU único ────────────────────────────────────────────────────
+// Toma las primeras letras del nombre + timestamp corto, garantiza unicidad
+const generateSKU = (name, existingSkus = []) => {
+  // Prefijo: primeras 3 letras del nombre en mayúsculas, sin espacios ni tildes
+  const clean = name
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quitar tildes
+    .replace(/[^a-zA-Z0-9]/g, "")                     // solo alfanumérico
+    .toUpperCase()
+    .slice(0, 3)
+    .padEnd(3, "X");                                   // mínimo 3 chars
+
+  // Sufijo: número correlativo hasta encontrar uno libre
+  let i = 1;
+  let candidate;
+  do {
+    candidate = `${clean}-${String(i).padStart(3, "0")}`;
+    i++;
+  } while (existingSkus.includes(candidate));
+
+  return candidate;
+};
+
+const ProductConfigForm = ({initial, onSave, onClose, categories, providers, existingSkus}) => {
+  const [f, setF] = useState(() => {
+    if (initial) return initial; // edición: no tocar el SKU
+    return {name:"",sku:"",categoryId:"",providerId:"",price:"",cost:"",stock:"",unit:"und",description:""};
+  });
+
+  const set = (k,v) => setF(x=>({...x,[k]:v}));
+
+  // Auto-genera el SKU cuando cambia el nombre (solo al crear, no al editar)
+  const handleNameChange = (e) => {
+    const name = e.target.value;
+    set("name", name);
+    if (!initial && name.trim().length >= 2) {
+      // Regenera cada vez que el nombre cambia para reflejar el nuevo prefijo
+      const newSku = generateSKU(name, existingSkus);
+      set("sku", newSku);
+    }
+  };
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+        <Inp label="Nombre *"       value={f.name}  onChange={handleNameChange}                              placeholder="Ej: Camiseta azul"/>
+        <div style={{marginBottom:12}}>
+          <label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>
+            SKU {!initial && <span style={{fontSize:10,color:"#6366f1",fontWeight:500}}>— generado automáticamente</span>}
+          </label>
+          <div style={{position:"relative"}}>
+            <input
+              value={f.sku}
+              onChange={e=>set("sku",e.target.value)}
+              placeholder="Auto"
+              style={{width:"100%",padding:"9px 36px 9px 12px",borderRadius:8,border:"1.5px solid #6366f1",fontSize:14,color:"#6366f1",fontWeight:700,fontFamily:"monospace",outline:"none",boxSizing:"border-box",background:"#eef2ff"}}
+            />
+            {!initial && (
+              <button
+                type="button"
+                title="Regenerar SKU"
+                onClick={()=>set("sku", generateSKU(f.name||"PRD", existingSkus))}
+                style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#6366f1",padding:"2px"}}
+              >🔄</button>
+            )}
+          </div>
+        </div>
+        <Sel label="Categoría"      value={f.categoryId||""} onChange={e=>set("categoryId",Number(e.target.value)||"")}
+          options={[{value:"",label:"— Sin categoría —"},...categories.map(c=>({value:c.id,label:c.name}))]}/>
+        <Sel label="Proveedor"      value={f.providerId||""} onChange={e=>set("providerId",Number(e.target.value)||"")}
+          options={[{value:"",label:"— Sin proveedor —"},...providers.map(p=>({value:p.id,label:p.name}))]}/>
+        <Inp label="Precio venta *" type="number" value={f.price} onChange={e=>set("price",+e.target.value)} placeholder="0"/>
+        <Inp label="Costo"          type="number" value={f.cost}  onChange={e=>set("cost",+e.target.value)}  placeholder="0"/>
+        <Inp label="Stock *"        type="number" value={f.stock} onChange={e=>set("stock",+e.target.value)} placeholder="0"/>
+        <Inp label="Unidad"         value={f.unit} onChange={e=>set("unit",e.target.value)}                  placeholder="und, kg…"/>
+      </div>
+      <Inp label="Descripción" value={f.description} onChange={e=>set("description",e.target.value)} placeholder="Opcional"/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={()=>{if(!f.name||!f.sku||f.stock==="")return alert("Campos requeridos incompletos"); onSave({...initial,...f});}}>Guardar</Btn>
+      </div>
+    </div>
+  );
+};
+
+const SettingsTab = ({settings, isMobile, s, saveSettings, resetDB}) => {
+  const [cfg, setCfg] = useState(settings);
+  useEffect(() => setCfg(settings), [settings]);
+  return (
+    <>
+      <div style={s.header}><h1 style={s.title}>⚙️ Ajustes</h1></div>
+      <div style={s.card}>
+        <div style={{padding:"18px"}}>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>🏪 Información del negocio</div>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"0 14px"}}>
+            <Inp label="Nombre del negocio" value={cfg.businessName}    onChange={e=>setCfg(c=>({...c,businessName:e.target.value}))}    placeholder="Mi Negocio"/>
+            <Inp label="Teléfono"           value={cfg.businessPhone}   onChange={e=>setCfg(c=>({...c,businessPhone:e.target.value}))}   placeholder="+57 300…"/>
+          </div>
+          <Inp label="Dirección"            value={cfg.businessAddress} onChange={e=>setCfg(c=>({...c,businessAddress:e.target.value}))} placeholder="Cra 5 #10-20, Ciudad"/>
+          <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
+          <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>📦 Inventario</div>
+          <Inp label={`Umbral stock bajo (actual: ${cfg.lowStockThreshold})`} type="number"
+            value={cfg.lowStockThreshold} onChange={e=>setCfg(c=>({...c,lowStockThreshold:Number(e.target.value)}))} placeholder="5"/>
+          <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+            <Btn onClick={async()=>{ try{ await saveSettings(cfg); alert("✅ Ajustes guardados"); }catch(e){ alert(e.message); } }}>💾 Guardar ajustes</Btn>
+          </div>
+        </div>
+      </div>
+      <div style={{...s.card,padding:"14px 18px",marginTop:14}}>
+        <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#b91c1c"}}>⚠️ Zona de peligro</div>
+        <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Elimina todos los datos. Esta acción no se puede deshacer.</div>
+        <Btn variant="danger" onClick={async()=>{ if(confirm("¿Seguro? Esto borrará TODOS los datos permanentemente.")) await resetDB(); }}>🗑️ Reiniciar base de datos</Btn>
+      </div>
+    </>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════
 //  APP
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
   const isMobile = useIsMobile();
   useEffect(()=>lockViewport(),[]);
 
-  const [db, setDB] = useState(()=>loadDB());
+  // ── Supabase DB hook ────────────────────────────────────────
+  const {
+    db, loading, error, reload,
+    addProduct, editProduct, deleteProduct,
+    addCategory, editCategory, deleteCategory,
+    addClient, editClient, deleteClient,
+    addProvider, editProvider, deleteProvider,
+    addPaymentMethod, editPaymentMethod, deletePaymentMethod,
+    addOrder, editOrder, advanceOrder, cancelOrder,
+    registerMovement,
+    saveSettings,
+    resetDB,
+  } = useDB();
+
   const [tab, setTab] = useState("Dashboard");
   const [sideOpen, setSideOpen] = useState(false);
 
@@ -604,75 +722,12 @@ export default function App() {
 
   const s = makeStyles(isMobile);
 
-  // ── DB helpers ──────────────────────────────────────────────
-  const dbOp = useCallback((fn) => setDB(db=>{ const d=fn(db); saveDB(d); return d; }),[]);
-
-  // Products
-  const addProduct    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"product"); return {...d2,products:[...d2.products,{...d,id}]}; });
-  const editProduct   = d => dbOp(db=>({...db,products:db.products.map(p=>p.id===d.id?d:p)}));
-  const deleteProduct = id=> dbOp(db=>({...db,products:db.products.filter(p=>p.id!==id)}));
-
-  // Categories
-  const addCat    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"category"); return {...d2,categories:[...d2.categories,{...d,id}]}; });
-  const editCat   = d => dbOp(db=>({...db,categories:db.categories.map(c=>c.id===d.id?d:c)}));
-  const deleteCat = id=> dbOp(db=>({...db,categories:db.categories.filter(c=>c.id!==id)}));
-
-  // Clients
-  const addClient    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"client"); return {...d2,clients:[...d2.clients,{...d,id}]}; });
-  const editClient   = d => dbOp(db=>({...db,clients:db.clients.map(c=>c.id===d.id?d:c)}));
-  const deleteClient = id=> dbOp(db=>({...db,clients:db.clients.filter(c=>c.id!==id)}));
-
-  // Providers
-  const addProvider    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"provider"); return {...d2,providers:[...d2.providers,{...d,id}]}; });
-  const editProvider   = d => dbOp(db=>({...db,providers:db.providers.map(p=>p.id===d.id?d:p)}));
-  const deleteProvider = id=> dbOp(db=>({...db,providers:db.providers.filter(p=>p.id!==id)}));
-
-  // PaymentMethods
-  const addPM    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"paymentMethod"); return {...d2,paymentMethods:[...d2.paymentMethods,{...d,id}]}; });
-  const editPM   = d => dbOp(db=>({...db,paymentMethods:db.paymentMethods.map(p=>p.id===d.id?d:p)}));
-  const deletePM = id=> dbOp(db=>({...db,paymentMethods:db.paymentMethods.filter(p=>p.id!==id)}));
-
-  // Orders
-  const advanceOrder = (id) => dbOp(db=>{
-    return {...db,orders:db.orders.map(o=>{
-      if(o.id!==id) return o;
-      const idx=ORDER_STATES.indexOf(o.state);
-      const next=ORDER_STATES[idx+1]||o.state;
-      return {...o,state:next,updatedAt:nowStr()};
-    })};
-  });
-  const cancelOrder = (id) => dbOp(db=>({...db,orders:db.orders.map(o=>o.id===id?{...o,state:"Cancelado",updatedAt:nowStr()}:o)}));
-
-  // Movements
-  const registerMovement = (resolvedLines,type,note,discount,delivery) => {
-    const date=nowStr();
-    dbOp(db=>{
-      let d={...db};
-      resolvedLines.forEach(({product,qty})=>{
-        const sa=type==="entrada"?product.stock+qty:type==="salida"?product.stock-qty:qty;
-        d={...d,products:d.products.map(p=>p.id===product.id?{...p,stock:sa}:p)};
-        const {id,db:d2}=nextSeq(d,"movement");
-        d={...d2,movements:[{id,productId:product.id,productName:product.name,sku:product.sku,type,qty,note,stockAfter:sa,discount:Number(discount)||0,date},...d2.movements]};
-      });
-      if(delivery?.name){
-        const sub=resolvedLines.reduce((s,r)=>s+r.product.price*r.qty,0);
-        const {id,db:d2}=nextSeq(d,"delivery");
-        d={...d2,deliveries:[{id,date,name:delivery.name,address:delivery.address,phone:delivery.phone,value:Number(delivery.value)||0,orderValue:sub,discount:Number(discount)||0,products:resolvedLines.map(r=>`${r.product.name} x${r.qty}`)},...d2.deliveries]};
-      }
-      return d;
-    });
-  };
-
-  // Settings
-  const saveSettings = (settings) => dbOp(db=>({...db,settings}));
-
   // ── KPIs ────────────────────────────────────────────────────
   const lowStock    = db.products.filter(p=>p.stock<=(db.settings.lowStockThreshold||5));
   const totalValue  = db.products.reduce((s,p)=>s+p.price*p.stock,0);
   const pendOrders  = db.orders.filter(o=>o.state==="Pendiente");
-  const todaySales  = db.movements.filter(m=>m.type==="salida"&&m.date?.startsWith(new Date().toLocaleDateString("es-CO")));
 
-  // ── Movement modal state ─────────────────────────────────────
+  // ── Movement modal state ────────────────────────────────────
   const [movLines,    setMovLines]    = useState([{productId:"",qty:""}]);
   const [movType,     setMovType]     = useState("salida");
   const [movNote,     setMovNote]     = useState("");
@@ -693,14 +748,18 @@ export default function App() {
   const handleMovSave = async ()=>{
     if(resolvedMovLines.length===0) return alert("Agrega al menos un producto.");
     for(const {product,qty} of resolvedMovLines) if(movType==="salida"&&qty>product.stock) return alert(`Stock insuficiente: ${product.name}`);
-    registerMovement(resolvedMovLines,movType,movNote,movDiscount,movDelivery);
-    if(movType==="salida"){
-      const {id}=nextSeq(db,"movement");
-      setMovGen(true);
-      try{ await generateInvoicePDF(resolvedMovLines,{note:movNote,discount:Number(movDiscount)||0,deliveryVal:Number(movDelivery.value)||0,clientName:movDelivery.name,paymentMethod:""},String(id).padStart(5,"0")); }catch(e){console.error(e);}
-      setMovGen(false);
-    }
-    setShowMovForm(false);
+    try {
+      await registerMovement(resolvedMovLines,movType,movNote,movDiscount,movDelivery);
+      if(movType==="salida"){
+        setMovGen(true);
+        try{
+          const invoiceNum = String(Date.now()).slice(-5);
+          await generateInvoicePDF(resolvedMovLines,{note:movNote,discount:Number(movDiscount)||0,deliveryVal:Number(movDelivery.value)||0,clientName:movDelivery.name,paymentMethod:""},invoiceNum);
+        }catch(e){console.error(e);}
+        setMovGen(false);
+      }
+      setShowMovForm(false);
+    } catch(e) { alert("Error al registrar: " + e.message); }
   };
 
   const handleOrderPDF = async (order)=>{
@@ -709,6 +768,29 @@ export default function App() {
     const pm=db.paymentMethods.find(p=>p.id===Number(order.paymentMethodId));
     await generateInvoicePDF(items,{note:order.note,discount:order.discount,deliveryVal:order.delivery?.value||0,clientName:client?.name||"",paymentMethod:pm?`${pm.icon} ${pm.name}`:""}, String(order.id).padStart(5,"0"));
   };
+
+  // ── Loading / Error screens ──────────────────────────────────
+  if (loading) return (
+    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{fontSize:48}}>📦</div>
+      <div style={{fontSize:20,fontWeight:800,color:"#0f172a"}}>InvenPro</div>
+      <div style={{fontSize:14,color:"#64748b"}}>Conectando con la base de datos…</div>
+      <div style={{width:40,height:40,border:"4px solid #e2e8f0",borderTop:"4px solid #6366f1",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
+  if (error) return (
+    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24}}>
+      <div style={{fontSize:48}}>⚠️</div>
+      <div style={{fontSize:18,fontWeight:800,color:"#b91c1c"}}>Error de conexión</div>
+      <div style={{fontSize:13,color:"#64748b",textAlign:"center",maxWidth:360}}>{error}</div>
+      <div style={{background:"#fee2e2",borderRadius:10,padding:"12px 18px",fontSize:12,color:"#7f1d1d",maxWidth:400}}>
+        Verifica que las variables <strong>VITE_SUPABASE_URL</strong> y <strong>VITE_SUPABASE_ANON_KEY</strong> estén configuradas correctamente en tu archivo <strong>.env</strong>
+      </div>
+      <button onClick={reload} style={{padding:"10px 24px",borderRadius:9,border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:14}}>🔄 Reintentar</button>
+    </div>
+  );
 
   // ═══════════════════════════════════════════════════════════
   //  RENDER
@@ -818,8 +900,8 @@ export default function App() {
               db.orders.map(o=>(
                 <OrderCard key={o.id} order={o} db={db}
                   onEdit={(order)=>{setEditingOrder(order);setShowOrderForm(true);}}
-                  onAdvance={advanceOrder}
-                  onCancel={(id)=>{ if(confirm("¿Cancelar este pedido?")) cancelOrder(id); }}
+                  onAdvance={async(id)=>{ try{await advanceOrder(id);}catch(e){alert(e.message);} }}
+                  onCancel={(id)=>{ if(confirm("¿Cancelar este pedido?")) cancelOrder(id).catch(e=>alert(e.message)); }}
                   onPDF={handleOrderPDF}
                 />
               ))
@@ -1036,17 +1118,8 @@ export default function App() {
         {tab==="Categorías"&&(
           <CRUDTable title="Categorías" icon="🏷️" items={db.categories} s={s}
             columns={[{key:"name",primary:true}]} emptyText="Sin categorías"
-            onAdd={addCat} onEdit={editCat} onDelete={deleteCat}
-            renderForm={({initial,onSave,onClose})=>{
-              const [name,setName]=useState(initial?.name||"");
-              return <div>
-                <Inp label="Nombre *" value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Bebidas"/>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
-                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{if(!name.trim())return alert("Nombre requerido");onSave({...initial,name:name.trim()});}}>Guardar</Btn>
-                </div>
-              </div>;
-            }}
+            onAdd={addCategory} onEdit={editCategory} onDelete={deleteCategory}
+            renderForm={(props)=><CategoryForm {...props}/>}
           />
         )}
 
@@ -1056,23 +1129,7 @@ export default function App() {
             columns={[{key:"name",primary:true},{key:"contact",prefix:"👤"},{key:"phone",prefix:"📞"},{key:"email",prefix:"✉️"},{key:"notes"}]}
             emptyText="Sin proveedores"
             onAdd={addProvider} onEdit={editProvider} onDelete={deleteProvider}
-            renderForm={({initial,onSave,onClose})=>{
-              const [f,setF]=useState(initial||{name:"",contact:"",phone:"",email:"",notes:""});
-              const set=(k,v)=>setF(x=>({...x,[k]:v}));
-              return <div>
-                <Inp label="Nombre empresa *" value={f.name}    onChange={e=>set("name",e.target.value)}    placeholder="TechDistrib S.A.S"/>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-                  <Inp label="Contacto"   value={f.contact} onChange={e=>set("contact",e.target.value)} placeholder="Carlos Ríos"/>
-                  <Inp label="Teléfono"   value={f.phone}   onChange={e=>set("phone",e.target.value)}   placeholder="605-3001001"/>
-                  <Inp label="Email"      value={f.email}   onChange={e=>set("email",e.target.value)}   placeholder="ventas@empresa.co"/>
-                </div>
-                <Inp label="Notas" value={f.notes} onChange={e=>set("notes",e.target.value)} placeholder="Ej: Mínimo 10 unidades, entrega 3 días…"/>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
-                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
-                </div>
-              </div>;
-            }}
+            renderForm={(props)=><ProviderForm {...props}/>}
           />
         )}
 
@@ -1080,21 +1137,8 @@ export default function App() {
         {tab==="Métodos de pago"&&(
           <CRUDTable title="Métodos de pago" icon="💳" items={db.paymentMethods} s={s}
             columns={[{key:"icon"},{key:"name",primary:true}]} emptyText="Sin métodos de pago"
-            onAdd={addPM} onEdit={editPM} onDelete={deletePM}
-            renderForm={({initial,onSave,onClose})=>{
-              const [f,setF]=useState(initial||{name:"",icon:"💳"});
-              const set=(k,v)=>setF(x=>({...x,[k]:v}));
-              return <div>
-                <div style={{display:"grid",gridTemplateColumns:"80px 1fr",gap:"0 12px"}}>
-                  <Inp label="Ícono" value={f.icon} onChange={e=>set("icon",e.target.value)} placeholder="💵"/>
-                  <Inp label="Nombre *" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Efectivo"/>
-                </div>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
-                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
-                </div>
-              </div>;
-            }}
+            onAdd={addPaymentMethod} onEdit={editPaymentMethod} onDelete={deletePaymentMethod}
+            renderForm={(props)=><PaymentMethodForm {...props}/>}
           />
         )}
 
@@ -1104,61 +1148,20 @@ export default function App() {
             columns={[{key:"name",primary:true},{key:"sku"},{key:"stock"}]}
             emptyText="Sin productos"
             onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct}
-            renderForm={({initial,onSave,onClose})=>{
-              const [f,setF]=useState(initial||{name:"",sku:"",categoryId:"",providerId:"",price:"",cost:"",stock:"",unit:"und",description:""});
-              const set=(k,v)=>setF(x=>({...x,[k]:v}));
-              return <div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-                  <Inp label="Nombre *"      value={f.name}  onChange={e=>set("name",e.target.value)}  placeholder="Producto"/>
-                  <Inp label="SKU *"         value={f.sku}   onChange={e=>set("sku",e.target.value)}   placeholder="SKU-001"/>
-                  <Sel label="Categoría"     value={f.categoryId} onChange={e=>set("categoryId",Number(e.target.value))}
-                    options={[{value:"",label:"— Sin categoría —"},...db.categories.map(c=>({value:c.id,label:c.name}))]}/>
-                  <Sel label="Proveedor"     value={f.providerId} onChange={e=>set("providerId",Number(e.target.value))}
-                    options={[{value:"",label:"— Sin proveedor —"},...db.providers.map(p=>({value:p.id,label:p.name}))]}/>
-                  <Inp label="Precio venta *" type="number" value={f.price}  onChange={e=>set("price",+e.target.value)}  placeholder="0"/>
-                  <Inp label="Costo"          type="number" value={f.cost}   onChange={e=>set("cost",+e.target.value)}   placeholder="0"/>
-                  <Inp label="Stock *"        type="number" value={f.stock}  onChange={e=>set("stock",+e.target.value)}  placeholder="0"/>
-                  <Inp label="Unidad"                       value={f.unit}   onChange={e=>set("unit",e.target.value)}    placeholder="und, kg…"/>
-                </div>
-                <Inp label="Descripción" value={f.description} onChange={e=>set("description",e.target.value)} placeholder="Opcional"/>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
-                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{if(!f.name||!f.sku||f.stock==="")return alert("Campos requeridos incompletos");onSave({...initial,...f});}}>Guardar</Btn>
-                </div>
-              </div>;
-            }}
+            renderForm={(props)=><ProductConfigForm {...props} categories={db.categories} providers={db.providers} existingSkus={db.products.map(p=>p.sku)}/>}
           />
         )}
 
         {/* ─── AJUSTES ─── */}
-        {tab==="Ajustes"&&(()=>{
-          const [cfg,setCfg]=useState(db.settings);
-          return <>
-            <div style={s.header}><h1 style={s.title}>⚙️ Ajustes</h1></div>
-            <div style={s.card}>
-              <div style={{padding:"18px 18px"}}>
-                <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>🏪 Información del negocio</div>
-                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"0 14px"}}>
-                  <Inp label="Nombre del negocio" value={cfg.businessName}    onChange={e=>setCfg(c=>({...c,businessName:e.target.value}))}    placeholder="Mi Negocio"/>
-                  <Inp label="Teléfono"           value={cfg.businessPhone}   onChange={e=>setCfg(c=>({...c,businessPhone:e.target.value}))}   placeholder="+57 300…"/>
-                </div>
-                <Inp label="Dirección"            value={cfg.businessAddress} onChange={e=>setCfg(c=>({...c,businessAddress:e.target.value}))} placeholder="Cra 5 #10-20, Ciudad"/>
-                <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
-                <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>📦 Inventario</div>
-                <Inp label={`Umbral de stock bajo (actual: ${cfg.lowStockThreshold})`} type="number" value={cfg.lowStockThreshold} onChange={e=>setCfg(c=>({...c,lowStockThreshold:Number(e.target.value)}))} placeholder="5"/>
-                <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-                  <Btn onClick={()=>saveSettings(cfg)}>💾 Guardar ajustes</Btn>
-                </div>
-              </div>
-            </div>
-            <div style={{...s.card,padding:"14px 18px",marginTop:14}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#b91c1c"}}>⚠️ Zona de peligro</div>
-              <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Elimina todos los datos de la base de datos. Esta acción no se puede deshacer.</div>
-              <Btn variant="danger" onClick={()=>{ if(confirm("¿Seguro? Esto borrará TODOS los datos permanentemente.")) { localStorage.removeItem(DB_KEY); window.location.reload(); } }}>🗑️ Reiniciar base de datos</Btn>
-            </div>
-          </>;
-        })()}
+        {tab==="Ajustes"&&(
+          <SettingsTab
+            settings={db.settings}
+            isMobile={isMobile}
+            s={s}
+            saveSettings={saveSettings}
+            resetDB={resetDB}
+          />
+        )}
 
       </main>
 
@@ -1183,7 +1186,7 @@ export default function App() {
       {/* ── MODAL: NUEVO/EDITAR PEDIDO ── */}
       {showOrderForm&&(
         <Modal title={editingOrder?"Editar pedido":"Nuevo pedido"} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}} maxWidth={640}>
-          <OrderForm db={db} setDB={setDB} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
+        <OrderForm db={db} addOrder={addOrder} editOrder={editOrder} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
         </Modal>
       )}
 
