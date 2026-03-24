@@ -7,13 +7,28 @@ import { useDB } from "./useDB";
 const lockViewport = () => {
   let m = document.querySelector("meta[name=viewport]");
   if (!m) { m = document.createElement("meta"); m.name = "viewport"; document.head.appendChild(m); }
-  m.content = "width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0,user-scalable=no";
+  m.content = "width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0,user-scalable=no,viewport-fit=cover";
+  // Prevenir bounce scroll en iOS
+  document.body.style.overscrollBehavior = "none";
 };
+
+// Detecta si está instalada como PWA (standalone)
+const isStandalone = () =>
+  window.matchMedia("(display-mode: standalone)").matches ||
+  window.navigator.standalone === true;
 
 const useIsMobile = () => {
   const [mob, setMob] = useState(window.innerWidth < 768);
   useEffect(() => { const h = () => setMob(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   return mob;
+};
+
+// Detecta plataforma para ajustes nativos
+const getPlatform = () => {
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return "ios";
+  if (/Android/.test(ua)) return "android";
+  return "web";
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -23,40 +38,52 @@ const THEME_KEY = "invenpro_theme";
 
 const THEMES = {
   light: {
-    "--bg":          "#f1f5f9",
-    "--bg2":         "#ffffff",
-    "--bg3":         "#f8fafc",
-    "--bg4":         "#f1f5f9",
-    "--border":      "#e2e8f0",
-    "--text":        "#0f172a",
-    "--text2":       "#475569",
-    "--text3":       "#94a3b8",
-    "--text4":       "#64748b",
-    "--card-shadow": "0 1px 4px rgba(0,0,0,0.06)",
-    "--sidebar-bg":  "#0f172a",
-    "--sidebar-border": "#1e293b",
-    "--sidebar-text":"#94a3b8",
-    "--sidebar-sub": "#334155",
-    "--input-bg":    "#f8fafc",
-    "--row-alt":     "#fafafa",
+    "--bg":             "#f5f5f7",   // gris Apple
+    "--bg2":            "#ffffff",
+    "--bg3":            "#f5f5f7",
+    "--bg4":            "#ebebf0",
+    "--border":         "#e8e8ed",
+    "--text":           "#1c1c1e",   // negro Apple
+    "--text2":          "#3a3a3c",
+    "--text3":          "#aeaeb2",
+    "--text4":          "#6c6c70",
+    "--accent":         "#6366f1",
+    "--accent2":        "#8b5cf6",
+    "--card-shadow":    "0 1px 3px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.04)",
+    "--card-radius":    "16px",
+    "--sidebar-bg":     "#1c1c1e",
+    "--sidebar-border": "#2c2c2e",
+    "--sidebar-text":   "#8e8e93",
+    "--sidebar-sub":    "#48484a",
+    "--input-bg":       "#f5f5f7",
+    "--row-alt":        "#fafafa",
+    "--destructive":    "#ff3b30",
+    "--success":        "#34c759",
+    "--warning":        "#ff9500",
   },
   dark: {
-    "--bg":          "#0f172a",
-    "--bg2":         "#1e293b",
-    "--bg3":         "#1a2744",
-    "--bg4":         "#162032",
-    "--border":      "#334155",
-    "--text":        "#f1f5f9",
-    "--text2":       "#cbd5e1",
-    "--text3":       "#64748b",
-    "--text4":       "#94a3b8",
-    "--card-shadow": "0 1px 6px rgba(0,0,0,0.35)",
-    "--sidebar-bg":  "#020617",
-    "--sidebar-border": "#0f172a",
-    "--sidebar-text":"#64748b",
-    "--sidebar-sub": "#1e293b",
-    "--input-bg":    "#162032",
-    "--row-alt":     "#1a2744",
+    "--bg":             "#000000",   // negro puro iOS dark
+    "--bg2":            "#1c1c1e",
+    "--bg3":            "#2c2c2e",
+    "--bg4":            "#3a3a3c",
+    "--border":         "#38383a",
+    "--text":           "#ffffff",
+    "--text2":          "#ebebf5cc",
+    "--text3":          "#48484a",
+    "--text4":          "#8e8e93",
+    "--accent":         "#7c7cff",
+    "--accent2":        "#a78bfa",
+    "--card-shadow":    "0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.25)",
+    "--card-radius":    "16px",
+    "--sidebar-bg":     "#000000",
+    "--sidebar-border": "#1c1c1e",
+    "--sidebar-text":   "#48484a",
+    "--sidebar-sub":    "#2c2c2e",
+    "--input-bg":       "#1c1c1e",
+    "--row-alt":        "#1c1c1e",
+    "--destructive":    "#ff453a",
+    "--success":        "#30d158",
+    "--warning":        "#ffd60a",
   },
 };
 
@@ -90,18 +117,104 @@ const useTheme = () => {
   return { theme, setTheme };
 };
 
-// CSS global con variables de tema aplicadas
 const injectGlobalCSS = () => {
   if (document.getElementById("invenpro-theme-css")) return;
   const style = document.createElement("style");
   style.id = "invenpro-theme-css";
   style.textContent = `
-    *, *::before, *::after { box-sizing: border-box; transition: background-color 0.2s, border-color 0.2s, color 0.15s; }
-    body { background: var(--bg); color: var(--text); margin: 0; }
-    input, select, textarea { color-scheme: light dark; }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    /* ── Reset & Base ─────────────────────────────────── */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+    }
+    html {
+      height: 100%;
+      height: -webkit-fill-available;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overscroll-behavior: none;
+      overflow-x: hidden;
+    }
+
+    /* ── Transiciones suaves ──────────────────────────── */
+    *, *::before, *::after {
+      transition: background-color 0.18s ease, border-color 0.18s ease, color 0.12s ease, box-shadow 0.18s ease;
+    }
+    button, a { transition: opacity 0.1s ease, transform 0.1s ease, background-color 0.15s ease !important; }
+    button:active { transform: scale(0.97); opacity: 0.85; }
+
+    /* ── Safe areas (notch / Dynamic Island / nav bar) ── */
+    .safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .safe-left   { padding-left:   env(safe-area-inset-left,   0px); }
+    .safe-right  { padding-right:  env(safe-area-inset-right,  0px); }
+
+    /* ── Inputs nativos ───────────────────────────────── */
+    input, select, textarea {
+      color-scheme: light dark;
+      font-size: 16px !important; /* evita zoom en iOS */
+      font-family: inherit;
+      border-radius: 12px;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: #6366f1 !important;
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+    }
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2394a3b8' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 32px !important;
+    }
+
+    /* ── Scrollbar sutil ──────────────────────────────── */
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    /* ── Cards con blur en iOS ────────────────────────── */
+    .glass-card {
+      background: rgba(255,255,255,0.72);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    [data-theme="dark"] .glass-card {
+      background: rgba(30,41,59,0.72);
+    }
+
+    /* ── Bottom nav safe area ─────────────────────────── */
+    .bottom-nav {
+      padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
+    }
+
+    /* ── Header safe area iOS ─────────────────────────── */
+    .top-bar {
+      padding-top: env(safe-area-inset-top, 0px);
+    }
+
+    /* ── Animación de entrada ─────────────────────────── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-up { animation: fadeUp 0.22s ease both; }
+
+    /* ── Ripple en botones ────────────────────────────── */
+    @keyframes ripple {
+      to { transform: scale(4); opacity: 0; }
+    }
   `;
   document.head.appendChild(style);
 };
@@ -208,53 +321,77 @@ const generateInvoicePDF = async (items, opts, invoiceNum) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  UI ATOMS
+//  UI ATOMS  — diseño minimalista nativo
 // ═══════════════════════════════════════════════════════════════
 const Badge = ({children,color="gray"}) => {
-  const C={green:["#dcfce7","#15803d"],red:["#fee2e2","#b91c1c"],yellow:["#fef9c3","#a16207"],blue:["#dbeafe","#1d4ed8"],purple:["#ede9fe","#6d28d9"],gray:["#f3f4f6","#374151"]};
-  const [bg,tc]=C[color]||C.gray;
-  return <span style={{background:bg,color:tc,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
+  const C = {
+    green:  ["rgba(52,199,89,0.12)",  "#34c759"],
+    red:    ["rgba(255,59,48,0.12)",  "var(--destructive)"],
+    yellow: ["rgba(255,149,0,0.12)",  "#ff9500"],
+    blue:   ["rgba(99,102,241,0.12)", "var(--accent)"],
+    purple: ["rgba(175,82,222,0.12)", "#af52de"],
+    gray:   ["var(--bg3)",            "var(--text4)"],
+  };
+  const [bg, tc] = C[color] || C.gray;
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",background:bg,color:tc,padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,letterSpacing:0.2,whiteSpace:"nowrap",lineHeight:1.4}}>
+      {children}
+    </span>
+  );
 };
 
-const Modal = ({title,onClose,children,maxWidth=540}) => (
-  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.7)",zIndex:3000,display:"flex",alignItems:"flex-start",justifyContent:"center",backdropFilter:"blur(4px)",overflowY:"auto",padding:"16px 12px"}}>
-    <div style={{background:"var(--bg2)",borderRadius:16,padding:"22px 22px",width:"100%",maxWidth,boxShadow:"0 24px 80px rgba(0,0,0,0.35)",margin:"auto",boxSizing:"border-box"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-        <h2 style={{margin:0,fontSize:16,fontWeight:800,color:"var(--text)"}}>{title}</h2>
-        <button onClick={onClose} style={{background:"var(--bg3)",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:20,color:"var(--text4)"}}>×</button>
+const Modal = ({title, onClose, children, maxWidth=540}) => (
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,display:"flex",alignItems:"flex-end",justifyContent:"center",backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)",overflowY:"auto"}}>
+    <div style={{background:"var(--bg2)",borderRadius:"22px 22px 0 0",padding:"0",width:"100%",maxWidth,boxShadow:"0 -2px 24px rgba(0,0,0,0.15)",margin:"0 auto",boxSizing:"border-box",maxHeight:"92vh",overflowY:"auto",paddingBottom:"env(safe-area-inset-bottom,16px)"}}>
+      <div style={{display:"flex",justifyContent:"center",paddingTop:10,paddingBottom:2}}>
+        <div style={{width:36,height:4,borderRadius:99,background:"var(--border)"}}/>
       </div>
-      {children}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 20px 14px"}}>
+        <h2 style={{margin:0,fontSize:17,fontWeight:700,color:"var(--text)",letterSpacing:-0.3}}>{title}</h2>
+        <button onClick={onClose} style={{background:"var(--bg3)",border:"none",borderRadius:99,width:30,height:30,cursor:"pointer",fontSize:15,color:"var(--text4)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:600}}>✕</button>
+      </div>
+      <div style={{padding:"0 20px 20px"}}>{children}</div>
     </div>
   </div>
 );
 
-const Inp = ({label,...p}) => (
-  <div style={{marginBottom:12}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:4}}>{label}</label>}
-    <input {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,color:"var(--text)",outline:"none",boxSizing:"border-box",background:"var(--input-bg)",...p.style}}/>
+const Inp = ({label, ...p}) => (
+  <div style={{marginBottom:14}}>
+    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text4)",marginBottom:5,letterSpacing:0.1}}>{label}</label>}
+    <input {...p} style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid var(--border)",fontSize:16,color:"var(--text)",outline:"none",boxSizing:"border-box",background:"var(--input-bg)",...p.style}}/>
   </div>
 );
 
-const Sel = ({label,options,...p}) => (
-  <div style={{marginBottom:12}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text2)",marginBottom:4}}>{label}</label>}
-    <select {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:15,color:"var(--text)",background:"var(--input-bg)",outline:"none",boxSizing:"border-box"}}>
+const Sel = ({label, options, ...p}) => (
+  <div style={{marginBottom:14}}>
+    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:"var(--text4)",marginBottom:5,letterSpacing:0.1}}>{label}</label>}
+    <select {...p} style={{width:"100%",padding:"12px 14px",borderRadius:12,border:"1.5px solid var(--border)",fontSize:16,color:"var(--text)",background:"var(--input-bg)",outline:"none",boxSizing:"border-box"}}>
       {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
     </select>
   </div>
 );
 
-const Btn = ({children,variant="primary",size="md",...p}) => {
-  const bg={primary:"linear-gradient(135deg,#6366f1,#8b5cf6)",danger:"#fee2e2",secondary:"var(--bg3)",green:"linear-gradient(135deg,#10b981,#059669)"};
-  const col={primary:"#fff",danger:"#b91c1c",secondary:"var(--text)",green:"#fff"};
-  const pad={md:"10px 18px",sm:"7px 13px",lg:"12px 24px"};
-  return <button {...p} style={{padding:pad[size],borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:size==="sm"?12:14,background:bg[variant],color:col[variant],boxShadow:variant==="primary"||variant==="green"?"0 3px 10px rgba(99,102,241,0.25)":"none",opacity:p.disabled?0.6:1,...p.style}}>{children}</button>;
+const Btn = ({children, variant="primary", size="md", ...p}) => {
+  const styles = {
+    primary:   {bg:"linear-gradient(135deg,var(--accent),var(--accent2))", color:"#fff", shadow:"0 2px 8px rgba(99,102,241,0.3)"},
+    secondary: {bg:"var(--bg3)", color:"var(--text)", shadow:"none"},
+    danger:    {bg:"rgba(255,59,48,0.1)", color:"var(--destructive)", shadow:"none"},
+    green:     {bg:"linear-gradient(135deg,#34c759,#30d158)", color:"#fff", shadow:"0 2px 8px rgba(52,199,89,0.3)"},
+    ghost:     {bg:"transparent", color:"var(--accent)", shadow:"none"},
+  };
+  const sizes = {sm:"7px 14px", md:"11px 20px", lg:"13px 26px"};
+  const fss   = {sm:12, md:14, lg:15};
+  const st = styles[variant] || styles.primary;
+  return (
+    <button {...p} style={{padding:sizes[size],borderRadius:12,border:"none",cursor:"pointer",fontWeight:600,fontSize:fss[size],background:st.bg,color:st.color,boxShadow:st.shadow,opacity:p.disabled?0.45:1,display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap",letterSpacing:0.1,...p.style}}>{children}</button>
+  );
 };
 
-const EmptyState = ({icon,text}) => (
-  <div style={{padding:"44px 16px",textAlign:"center",color:"var(--text3)"}}>
-    <div style={{fontSize:36,marginBottom:8}}>{icon}</div>
-    <div style={{fontSize:13}}>{text}</div>
+const EmptyState = ({icon, text, action}) => (
+  <div style={{padding:"52px 20px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+    <div style={{fontSize:44,marginBottom:4,opacity:0.35}}>{icon}</div>
+    <div style={{fontSize:14,fontWeight:500,color:"var(--text3)",maxWidth:240,lineHeight:1.5}}>{text}</div>
+    {action}
   </div>
 );
 
@@ -326,8 +463,8 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
     if (!sideOpen) return null;
     return (
       <>
-        <div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1500}}/>
-        <aside style={{position:"fixed",top:0,right:0,bottom:0,width:240,background:"#0f172a",zIndex:1600,overflowY:"auto"}}>
+        <div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:1500,backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)"}}/>
+        <aside style={{position:"fixed",top:0,right:0,bottom:0,width:280,background:"var(--sidebar-bg)",zIndex:1600,overflowY:"auto",boxShadow:"-4px 0 32px rgba(0,0,0,0.25)",paddingTop:"env(safe-area-inset-top,0px)"}}>
           {content}
         </aside>
       </>
@@ -335,33 +472,62 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
   }
 
   return (
-    <aside style={{width:220,background:"#0f172a",minHeight:"100vh",position:"fixed",top:0,right:0,bottom:0,overflowY:"auto",zIndex:100}}>
+    <aside style={{width:220,background:"var(--sidebar-bg)",minHeight:"100vh",position:"fixed",top:0,right:0,bottom:0,overflowY:"auto",zIndex:100,borderLeft:"0.5px solid var(--sidebar-border)"}}>
       {content}
     </aside>
   );
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  STYLES FACTORY  (usa variables CSS del tema)
+//  STYLES FACTORY  — diseño nativo minimalista
 // ═══════════════════════════════════════════════════════════════
 const makeStyles = (isMobile) => ({
-  main:     {marginRight:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh",background:"var(--bg)"},
-  header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10},
-  title:    {fontSize:isMobile?18:22,fontWeight:900,color:"var(--text)",margin:0},
-  kpiGrid:  (cols)=>({display:"grid",gridTemplateColumns:`repeat(${isMobile?Math.min(cols,2):cols},1fr)`,gap:12,marginBottom:18}),
-  kpiCard:  (c)=>({background:"var(--bg2)",borderRadius:12,padding:isMobile?"12px 14px":"16px 18px",boxShadow:"var(--card-shadow)",borderLeft:`4px solid ${c}`}),
-  kpiVal:   {fontSize:isMobile?18:24,fontWeight:900,color:"var(--text)",lineHeight:1.1,marginBottom:3},
+  main:     {
+    marginRight: isMobile ? 0 : 220,
+    padding: isMobile ? "0 0 88px" : "28px 32px",
+    minHeight: "100vh",
+    background: "var(--bg)",
+  },
+  header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10},
+  title:    {fontSize:isMobile?20:24,fontWeight:700,color:"var(--text)",margin:0,letterSpacing:-0.5},
+  kpiGrid:  (cols)=>({display:"grid",gridTemplateColumns:`repeat(${isMobile?Math.min(cols,2):cols},1fr)`,gap:10,marginBottom:16}),
+  kpiCard:  (c)=>({
+    background:"var(--bg2)",
+    borderRadius:20,
+    padding: isMobile ? "16px 16px" : "18px 20px",
+    boxShadow:"var(--card-shadow)",
+    borderTop:`3px solid ${c}`,
+    borderLeft:"none",
+  }),
+  kpiVal:   {fontSize:isMobile?20:26,fontWeight:700,color:"var(--text)",lineHeight:1.1,marginBottom:3,letterSpacing:-0.5},
   kpiLabel: {fontSize:isMobile?10:12,color:"var(--text4)",fontWeight:500},
-  card:     {background:"var(--bg2)",borderRadius:13,boxShadow:"var(--card-shadow)",overflow:"hidden",marginBottom:16},
-  tHead:    (cols)=>({display:"grid",gridTemplateColumns:cols,padding:"8px 16px",background:"var(--bg3)",borderBottom:"1px solid var(--border)"}),
-  tRow:     (cols)=>({display:"grid",gridTemplateColumns:cols,alignItems:"center",padding:"11px 16px",borderBottom:"1px solid var(--bg4)"}),
-  th:       {fontSize:10,fontWeight:700,color:"var(--text3)",textTransform:"uppercase",letterSpacing:0.6},
+  card:     {background:"var(--bg2)",borderRadius:20,boxShadow:"var(--card-shadow)",overflow:"hidden",marginBottom:12},
+  tHead:    (cols)=>({display:"grid",gridTemplateColumns:cols,padding:"10px 16px",background:"var(--bg3)",borderBottom:"1px solid var(--border)"}),
+  tRow:     (cols)=>({display:"grid",gridTemplateColumns:cols,alignItems:"center",padding:"13px 16px",borderBottom:"1px solid var(--bg4)"}),
+  th:       {fontSize:10,fontWeight:600,color:"var(--text3)",textTransform:"uppercase",letterSpacing:0.8},
   toolbar:  {display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"},
   searchW:  {position:"relative",flex:1,minWidth:140},
-  searchI:  {width:"100%",padding:"9px 14px 9px 34px",borderRadius:8,border:"1.5px solid var(--border)",fontSize:14,outline:"none",background:"var(--input-bg)",color:"var(--text)",boxSizing:"border-box"},
-  iconBtn:  {background:"none",border:"none",cursor:"pointer",padding:"6px 7px",borderRadius:8,fontSize:16},
-  bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"var(--sidebar-bg)",zIndex:500,display:"flex",borderTop:"1px solid var(--sidebar-border)",paddingBottom:"env(safe-area-inset-bottom,0)"},
-  bottomBtn:(a)=>({flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 2px 6px",border:"none",background:"transparent",cursor:"pointer",color:a?"#818cf8":"var(--sidebar-text)",fontSize:9,fontWeight:a?700:500,gap:2,minWidth:0}),
+  searchI:  {width:"100%",padding:"11px 16px 11px 38px",borderRadius:14,border:"1.5px solid var(--border)",fontSize:15,outline:"none",background:"var(--input-bg)",color:"var(--text)",boxSizing:"border-box"},
+  iconBtn:  {background:"none",border:"none",cursor:"pointer",padding:"8px",borderRadius:10,fontSize:17,color:"var(--text4)"},
+  bottomNav:{
+    position:"fixed", bottom:0, left:0, right:0,
+    background:"var(--bg2)",
+    zIndex:500, display:"flex",
+    borderTop:"0.5px solid var(--border)",
+    paddingBottom:"env(safe-area-inset-bottom,8px)",
+    backdropFilter:"blur(20px)",
+    WebkitBackdropFilter:"blur(20px)",
+  },
+  bottomBtn:(a)=>({
+    flex:1, display:"flex", flexDirection:"column",
+    alignItems:"center", justifyContent:"center",
+    padding:"10px 2px 6px",
+    border:"none", background:"transparent", cursor:"pointer",
+    color: a ? "var(--accent)" : "var(--text3)",
+    fontSize:9, fontWeight: a ? 700 : 400,
+    gap:3, minWidth:0,
+    position:"relative",
+  }),
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -984,13 +1150,30 @@ export default function App() {
 
       <Sidebar tab={tab} setTab={setTab} db={db} sideOpen={sideOpen} setSideOpen={setSideOpen} isMobile={isMobile} theme={theme} setTheme={setTheme}/>
 
-      <main style={s.main}>
+      <main style={{...s.main, paddingTop: isMobile ? "16px" : undefined}}>
 
         {/* Mobile top bar */}
         {isMobile&&(
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <div style={{fontWeight:800,fontSize:15,color:"var(--text)"}}>{tab}</div>
-            <button onClick={()=>setSideOpen(true)} style={{background:"#0f172a",border:"none",borderRadius:9,width:36,height:36,cursor:"pointer",color:"#fff",fontSize:18}}>☰</button>
+          <div style={{
+            display:"flex", justifyContent:"space-between", alignItems:"center",
+            padding:"12px 16px 10px",
+            paddingTop:"calc(env(safe-area-inset-top, 0px) + 12px)",
+            background:"var(--bg2)",
+            borderBottom:"0.5px solid var(--border)",
+            marginBottom:0,
+            position:"sticky", top:0, zIndex:50,
+            backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)",
+          }}>
+            <div>
+              <div style={{fontWeight:700,fontSize:16,color:"var(--text)",letterSpacing:-0.3}}>📦 InvenPro</div>
+              <div style={{fontSize:11,color:"var(--text4)"}}>{tab}</div>
+            </div>
+            <button onClick={()=>setSideOpen(true)} style={{
+              background:"var(--bg3)", border:"none", borderRadius:10,
+              width:36, height:36, cursor:"pointer",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              fontSize:16, color:"var(--text)",
+            }}>☰</button>
           </div>
         )}
 
@@ -1408,18 +1591,22 @@ export default function App() {
 
       </main>
 
-      {/* ── BOTTOM NAV (móvil) ── */}
+      {/* ── BOTTOM NAV (móvil) — estilo tab bar nativo ── */}
       {isMobile&&(
         <nav style={s.bottomNav}>
           {["Dashboard","Pedidos","Inventario","Reportes","Alertas"].map(t=>{
-            const badge=t==="Alertas"&&lowStock.length>0?lowStock.length:t==="Pedidos"&&pendOrders.length>0?pendOrders.length:null;
+            const active = tab===t;
+            const badge = t==="Alertas"&&lowStock.length>0 ? lowStock.length
+                        : t==="Pedidos"&&pendOrders.length>0 ? pendOrders.length : null;
             return (
-              <button key={t} onClick={()=>setTab(t)} style={s.bottomBtn(tab===t)}>
-                <span style={{fontSize:18,position:"relative"}}>
+              <button key={t} onClick={()=>setTab(t)} style={s.bottomBtn(active)}>
+                {/* Indicador activo */}
+                {active && <div style={{position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:20,height:2.5,borderRadius:99,background:"var(--accent)"}}/>}
+                <span style={{fontSize:20,position:"relative",lineHeight:1}}>
                   {NAV_ICONS[t]}
-                  {badge&&<span style={{position:"absolute",top:-4,right:-6,background:"#ef4444",color:"#fff",borderRadius:20,fontSize:8,fontWeight:800,padding:"0 4px",lineHeight:"14px"}}>{badge}</span>}
+                  {badge&&<span style={{position:"absolute",top:-3,right:-7,background:"var(--destructive)",color:"#fff",borderRadius:99,fontSize:9,fontWeight:700,padding:"0 4px",lineHeight:"15px",minWidth:15,textAlign:"center"}}>{badge}</span>}
                 </span>
-                <span style={{fontSize:9,lineHeight:1}}>{t}</span>
+                <span style={{fontSize:10,letterSpacing:0.1}}>{t}</span>
               </button>
             );
           })}
