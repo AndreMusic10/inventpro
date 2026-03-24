@@ -20,7 +20,7 @@ const useIsMobile = () => {
 
 const DEFAULT_CATEGORIES = ["Electrónica", "Ropa", "Alimentos", "Hogar", "Otro"];
 const LOW_STOCK_THRESHOLD = 5;
-const TABS = ["Dashboard", "Inventario", "Movimientos", "Domicilios", "Alertas", "Categorías"];
+const TABS = ["Dashboard", "Inventario", "Movimientos", "Domicilios", "Alertas", "Categorías", "Reportes"];
 
 const initialProducts = [
   { id: 1, name: "Audífonos Bluetooth", sku: "ELEC-001", category: "Electrónica", price: 350000, cost: 180000, stock: 12, unit: "und", description: "Audífonos inalámbricos con cancelación de ruido" },
@@ -433,6 +433,377 @@ const CategoriesTab = ({ categories, setCategories, products, setProducts, s }) 
   );
 };
 
+// ── ReportesTab ───────────────────────────────────────────────────────────────
+const ReportesTab = ({ movements, products, isMobile, s }) => {
+  const [periodo, setPeriodo] = useState("semana");
+
+  // ── Helpers de fecha ────────────────────────────────────────────────────────
+  const parseDate = (str) => {
+    // formato "DD/MM/YYYY, HH:MM:SS" o similar según es-CO
+    try {
+      const parts = str.split(", ")[0].split("/");
+      if (parts.length === 3) {
+        const [d, m, y] = parts;
+        return new Date(`${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`);
+      }
+    } catch {}
+    return new Date(str);
+  };
+
+  const now = new Date();
+  const startOf = {
+    dia:    new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+    semana: new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()),
+    mes:    new Date(now.getFullYear(), now.getMonth(), 1),
+  };
+
+  const filteredMov = useMemo(() => {
+    const desde = startOf[periodo];
+    return movements.filter(m => {
+      const d = parseDate(m.date);
+      return d >= desde;
+    });
+  }, [movements, periodo]);
+
+  // Solo salidas para ventas
+  const salidas = filteredMov.filter(m => m.type === "salida");
+  const entradas = filteredMov.filter(m => m.type === "entrada");
+  const ajustes  = filteredMov.filter(m => m.type === "ajuste");
+
+  // Valor total de ventas del periodo
+  const valorVentas = salidas.reduce((s, m) => {
+    const prod = products.find(p => p.id === m.productId);
+    return s + (prod ? prod.price * m.qty : 0);
+  }, 0);
+
+  const totalUnidadesVendidas = salidas.reduce((s, m) => s + m.qty, 0);
+
+  // ── Top 5 más vendidos (por unidades) ──────────────────────────────────────
+  const topVendidos = useMemo(() => {
+    const mapa = {};
+    salidas.forEach(m => {
+      if (!mapa[m.productId]) mapa[m.productId] = { productId: m.productId, name: m.productName, sku: m.sku, qty: 0, valor: 0 };
+      const prod = products.find(p => p.id === m.productId);
+      mapa[m.productId].qty += m.qty;
+      mapa[m.productId].valor += prod ? prod.price * m.qty : 0;
+    });
+    return Object.values(mapa).sort((a, b) => b.qty - a.qty).slice(0, 5);
+  }, [salidas, products]);
+
+  const maxQty = topVendidos[0]?.qty || 1;
+
+  // ── Top 5 más vendidos HISTÓRICO (todos los movimientos, no solo el periodo) ──
+  const topHistorico = useMemo(() => {
+    const mapa = {};
+    movements.filter(m => m.type === "salida").forEach(m => {
+      if (!mapa[m.productId]) mapa[m.productId] = { productId: m.productId, name: m.productName, sku: m.sku, qty: 0 };
+      mapa[m.productId].qty += m.qty;
+    });
+    return Object.values(mapa).sort((a, b) => b.qty - a.qty).slice(0, 5);
+  }, [movements]);
+
+  // ── Baja rotación: productos con 0 salidas en el periodo ──────────────────
+  const bajaRotacion = useMemo(() => {
+    const vendidosIds = new Set(salidas.map(m => m.productId));
+    return products
+      .filter(p => !vendidosIds.has(p.id))
+      .sort((a, b) => a.stock - b.stock);
+  }, [salidas, products]);
+
+  // ── Movimientos por día (últimos 7 días para gráfico) ─────────────────────
+  const movPorDia = useMemo(() => {
+    const dias = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const label = d.toLocaleDateString("es-CO", { weekday: "short", day: "numeric" });
+      const dayMov = movements.filter(m => {
+        const md = parseDate(m.date);
+        return md.getFullYear() === d.getFullYear() && md.getMonth() === d.getMonth() && md.getDate() === d.getDate();
+      });
+      const ventas  = dayMov.filter(m => m.type === "salida").reduce((s, m) => s + m.qty, 0);
+      const ingresos = dayMov.filter(m => m.type === "entrada").reduce((s, m) => s + m.qty, 0);
+      dias.push({ label, ventas, ingresos });
+    }
+    return dias;
+  }, [movements]);
+
+  const maxBarVal = Math.max(...movPorDia.map(d => Math.max(d.ventas, d.ingresos)), 1);
+
+  const periodos = [
+    { key: "dia",    label: "Hoy"      },
+    { key: "semana", label: "Semana"   },
+    { key: "mes",    label: "Mes"      },
+  ];
+
+  const colores = { salida: "#b91c1c", entrada: "#15803d", ajuste: "#1d4ed8" };
+
+  return (
+    <>
+      {/* Header */}
+      {!isMobile && (
+        <div style={s.header}>
+          <h1 style={s.pageTitle}>Reportes</h1>
+        </div>
+      )}
+
+      {/* Selector de periodo */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {periodos.map(p => (
+          <button key={p.key} onClick={() => setPeriodo(p.key)} style={{
+            padding: "9px 20px", borderRadius: 9, border: periodo === p.key ? "2px solid #6366f1" : "1.5px solid #e2e8f0",
+            background: periodo === p.key ? "linear-gradient(135deg,#6366f1,#8b5cf6)" : "#fff",
+            color: periodo === p.key ? "#fff" : "#64748b", cursor: "pointer", fontWeight: 700, fontSize: 13,
+            boxShadow: periodo === p.key ? "0 4px 12px rgba(99,102,241,0.3)" : "none"
+          }}>{p.label}</button>
+        ))}
+      </div>
+
+      {/* KPIs del periodo */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+        {[
+          { label: "Movimientos",      val: filteredMov.length,          color: "#6366f1", icon: "🔄" },
+          { label: "Salidas",          val: salidas.length,               color: "#b91c1c", icon: "📤" },
+          { label: "Entradas",         val: entradas.length,              color: "#15803d", icon: "📥" },
+          { label: "Unidades vendidas",val: totalUnidadesVendidas,        color: "#f59e0b", icon: "🏷️" },
+        ].map(k => (
+          <div key={k.label} style={s.kpiCard(k.color)}>
+            <div style={{ fontSize: 20, marginBottom: 5 }}>{k.icon}</div>
+            <div style={s.kpiVal}>{k.val}</div>
+            <div style={s.kpiLabel}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Valor total ventas */}
+      <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", borderRadius: 14, padding: isMobile ? "16px 18px" : "20px 28px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+            💰 VALOR TOTAL EN VENTAS — {periodos.find(p => p.key === periodo)?.label.toUpperCase()}
+          </div>
+          <div style={{ color: "#fff", fontSize: isMobile ? 26 : 34, fontWeight: 900, letterSpacing: -1 }}>
+            {formatCOP(valorVentas)}
+          </div>
+        </div>
+        <div style={{ textAlign: isMobile ? "left" : "right" }}>
+          <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Basado en precio de venta</div>
+          <div style={{ color: "#fff", fontWeight: 700, fontSize: 13 }}>{salidas.length} transacciones</div>
+        </div>
+      </div>
+
+      {/* Gráfico de barras - últimos 7 días */}
+      <div style={{ ...s.card, padding: "18px 18px 14px", marginBottom: 20 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 16, color: "#0f172a" }}>
+          📅 Actividad — Últimos 7 días
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: isMobile ? 6 : 10, height: 100 }}>
+          {movPorDia.map((d, i) => (
+            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+              <div style={{ width: "100%", display: "flex", gap: 2, alignItems: "flex-end", height: 80 }}>
+                {/* Barra ventas */}
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  <div style={{
+                    background: d.ventas > 0 ? "#fee2e2" : "#f1f5f9",
+                    borderRadius: "4px 4px 0 0",
+                    height: `${(d.ventas / maxBarVal) * 76}px`,
+                    minHeight: d.ventas > 0 ? 4 : 0,
+                    transition: "height 0.4s ease",
+                    position: "relative"
+                  }}>
+                    {d.ventas > 0 && (
+                      <div style={{ position: "absolute", top: -16, left: "50%", transform: "translateX(-50%)", fontSize: 9, fontWeight: 700, color: "#b91c1c", whiteSpace: "nowrap" }}>{d.ventas}</div>
+                    )}
+                  </div>
+                </div>
+                {/* Barra entradas */}
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  <div style={{
+                    background: d.ingresos > 0 ? "#dcfce7" : "#f1f5f9",
+                    borderRadius: "4px 4px 0 0",
+                    height: `${(d.ingresos / maxBarVal) * 76}px`,
+                    minHeight: d.ingresos > 0 ? 4 : 0,
+                    transition: "height 0.4s ease",
+                    position: "relative"
+                  }}>
+                    {d.ingresos > 0 && (
+                      <div style={{ position: "absolute", top: -16, left: "50%", transform: "translateX(-50%)", fontSize: 9, fontWeight: 700, color: "#15803d", whiteSpace: "nowrap" }}>{d.ingresos}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: isMobile ? 8 : 10, color: "#94a3b8", fontWeight: 500, textAlign: "center" }}>{d.label}</div>
+            </div>
+          ))}
+        </div>
+        {/* Leyenda */}
+        <div style={{ display: "flex", gap: 16, marginTop: 10, justifyContent: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b" }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fee2e2", border: "1px solid #b91c1c" }} />
+            Salidas
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b" }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, background: "#dcfce7", border: "1px solid #15803d" }} />
+            Entradas
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
+
+        {/* Top 5 más vendidos en el periodo */}
+        <div style={s.card}>
+          <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>🏆 Top 5 más vendidos</span>
+            <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>{periodos.find(p => p.key === periodo)?.label}</span>
+          </div>
+          {topVendidos.length === 0 ? (
+            <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+              Sin ventas en este periodo
+            </div>
+          ) : (
+            topVendidos.map((item, idx) => (
+              <div key={item.productId} style={{ padding: "12px 18px", borderBottom: "1px solid #f1f5f9" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ background: idx === 0 ? "#fef9c3" : idx === 1 ? "#f1f5f9" : "#f8fafc", color: idx === 0 ? "#a16207" : "#64748b", width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
+                      {idx + 1}
+                    </span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>{item.name}</div>
+                      <div style={{ fontSize: 10, color: "#94a3b8" }}>{item.sku}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: "#b91c1c" }}>{item.qty} und</div>
+                    <div style={{ fontSize: 10, color: "#64748b" }}>{formatCOP(item.valor)}</div>
+                  </div>
+                </div>
+                {/* Barra de progreso */}
+                <div style={{ height: 5, background: "#f1f5f9", borderRadius: 10 }}>
+                  <div style={{ width: `${(item.qty / maxQty) * 100}%`, height: "100%", background: idx === 0 ? "linear-gradient(90deg,#f59e0b,#fbbf24)" : "linear-gradient(90deg,#6366f1,#8b5cf6)", borderRadius: 10, transition: "width 0.5s" }} />
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Top 5 histórico */}
+        <div style={s.card}>
+          <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>📊 Top 5 histórico</span>
+            <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>Todos los tiempos</span>
+          </div>
+          {topHistorico.length === 0 ? (
+            <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin ventas registradas</div>
+          ) : (
+            topHistorico.map((item, idx) => {
+              const maxH = topHistorico[0]?.qty || 1;
+              return (
+                <div key={item.productId} style={{ padding: "12px 18px", borderBottom: "1px solid #f1f5f9" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ background: idx === 0 ? "#fef9c3" : "#f1f5f9", color: idx === 0 ? "#a16207" : "#64748b", width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
+                        {idx + 1}
+                      </span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{item.name}</div>
+                        <div style={{ fontSize: 10, color: "#94a3b8" }}>{item.sku}</div>
+                      </div>
+                    </div>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: "#6366f1" }}>{item.qty} und</div>
+                  </div>
+                  <div style={{ height: 5, background: "#f1f5f9", borderRadius: 10 }}>
+                    <div style={{ width: `${(item.qty / maxH) * 100}%`, height: "100%", background: "linear-gradient(90deg,#6366f1,#8b5cf6)", borderRadius: 10 }} />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Productos de baja rotación */}
+      <div style={s.card}>
+        <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>🐢 Baja rotación</span>
+          <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>Sin ventas en el periodo · {bajaRotacion.length} productos</span>
+        </div>
+        {bajaRotacion.length === 0 ? (
+          <div style={{ padding: "28px 18px", textAlign: "center", color: "#15803d", fontSize: 13 }}>
+            ✅ Todos los productos tuvieron movimiento en este periodo
+          </div>
+        ) : (
+          <>
+            {/* Cabecera tabla */}
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr auto auto" : "2fr 1fr 1fr 1fr 1fr", padding: "8px 18px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+              <span style={s.th}>Producto</span>
+              {!isMobile && <span style={s.th}>Categoría</span>}
+              {!isMobile && <span style={s.th}>Precio</span>}
+              <span style={s.th}>Stock</span>
+              <span style={s.th}>Estado</span>
+            </div>
+            {bajaRotacion.map(p => (
+              <div key={p.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr auto auto" : "2fr 1fr 1fr 1fr 1fr", padding: "11px 18px", borderBottom: "1px solid #f1f5f9", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8" }}>{p.sku}</div>
+                </div>
+                {!isMobile && <span style={{ fontSize: 12, color: "#64748b" }}>{p.category}</span>}
+                {!isMobile && <span style={{ fontSize: 12, fontWeight: 600 }}>{formatCOP(p.price)}</span>}
+                <span style={{ fontSize: 12, fontWeight: 700, color: p.stock === 0 ? "#b91c1c" : "#334155" }}>{p.stock} {p.unit}</span>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20, whiteSpace: "nowrap",
+                  background: p.stock === 0 ? "#fee2e2" : p.stock <= 5 ? "#fef9c3" : "#f1f5f9",
+                  color: p.stock === 0 ? "#b91c1c" : p.stock <= 5 ? "#a16207" : "#64748b"
+                }}>
+                  {p.stock === 0 ? "Agotado" : p.stock <= 5 ? "Stock bajo" : "Sin mover"}
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Lista de movimientos del periodo */}
+      <div style={{ ...s.card, marginTop: 16 }}>
+        <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9" }}>
+          🔄 Movimientos del periodo ({filteredMov.length})
+        </div>
+        {filteredMov.length === 0 ? (
+          <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin movimientos en este periodo</div>
+        ) : (
+          filteredMov.slice(0, 20).map(m => {
+            const prod = products.find(p => p.id === m.productId);
+            return (
+              <div key={m.id} style={{ padding: "11px 18px", borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>{m.type === "entrada" ? "📥" : m.type === "salida" ? "📤" : "🔄"}</span>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{m.productName}</div>
+                    <div style={{ fontSize: 10, color: "#94a3b8" }}>{m.date}{m.note ? ` · ${m.note}` : ""}</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ fontWeight: 800, fontSize: 14, color: colores[m.type] }}>
+                    {m.type === "entrada" ? "+" : m.type === "salida" ? "-" : "="}{m.qty}
+                  </span>
+                  {prod && m.type === "salida" && (
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{formatCOP(prod.price * m.qty)}</span>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+        {filteredMov.length > 20 && (
+          <div style={{ padding: "12px 18px", textAlign: "center", fontSize: 12, color: "#94a3b8" }}>
+            Mostrando 20 de {filteredMov.length} movimientos
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const isMobile = useIsMobile();
@@ -510,7 +881,7 @@ export default function App() {
     searchInp:{flex:1,minWidth:160,padding:"9px 14px 9px 36px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:14,outline:"none",background:"#f8fafc",color:"#0f172a"},
   };
 
-  const navIcon=(t)=>({Dashboard:"📊",Inventario:"📦",Movimientos:"🔄",Domicilios:"🛵",Alertas:"🔔","Categorías":"🏷️"}[t]);
+  const navIcon=(t)=>({Dashboard:"📊",Inventario:"📦",Movimientos:"🔄",Domicilios:"🛵",Alertas:"🔔","Categorías":"🏷️","Reportes":"📈"}[t]);
 
   // Tarjeta compacta para móvil en Inventario
   const MobileProductCard = ({p}) => (
@@ -894,6 +1265,11 @@ export default function App() {
         {/* ─── CATEGORÍAS ─── */}
         {tab==="Categorías"&&(
           <CategoriesTab categories={categories} setCategories={setCategories} products={products} setProducts={setProducts} s={s}/>
+        )}
+
+        {/* ─── REPORTES ─── */}
+        {tab==="Reportes"&&(
+          <ReportesTab movements={movements} products={products} isMobile={isMobile} s={s}/>
         )}
       </main>
 
