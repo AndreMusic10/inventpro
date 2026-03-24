@@ -1,44 +1,127 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 
-// ── Bloquear zoom y fijar viewport ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  VIEWPORT LOCK
+// ═══════════════════════════════════════════════════════════════
 const lockViewport = () => {
-  let meta = document.querySelector("meta[name=viewport]");
-  if (!meta) { meta = document.createElement("meta"); meta.name = "viewport"; document.head.appendChild(meta); }
-  meta.content = "width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no";
+  let m = document.querySelector("meta[name=viewport]");
+  if (!m) { m = document.createElement("meta"); m.name = "viewport"; document.head.appendChild(m); }
+  m.content = "width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0,user-scalable=no";
 };
 
-// ── Breakpoint helper ────────────────────────────────────────────────────────
 const useIsMobile = () => {
-  const [mobile, setMobile] = useState(window.innerWidth < 768);
-  useEffect(() => {
-    const h = () => setMobile(window.innerWidth < 768);
-    window.addEventListener("resize", h);
-    return () => window.removeEventListener("resize", h);
-  }, []);
-  return mobile;
+  const [mob, setMob] = useState(window.innerWidth < 768);
+  useEffect(() => { const h = () => setMob(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
+  return mob;
 };
 
-const DEFAULT_CATEGORIES = ["Electrónica", "Ropa", "Alimentos", "Hogar", "Otro"];
-const LOW_STOCK_THRESHOLD = 5;
-const TABS = ["Dashboard", "Inventario", "Movimientos", "Domicilios", "Alertas", "Categorías", "Reportes"];
+// ═══════════════════════════════════════════════════════════════
+//  DATABASE  (state-based, in-memory with localStorage persistence)
+// ═══════════════════════════════════════════════════════════════
+const DB_KEY = "invenpro_db";
 
-const initialProducts = [
-  { id: 1, name: "Audífonos Bluetooth", sku: "ELEC-001", category: "Electrónica", price: 350000, cost: 180000, stock: 12, unit: "und", description: "Audífonos inalámbricos con cancelación de ruido" },
-  { id: 2, name: "Camiseta Básica",     sku: "ROPA-001", category: "Ropa",        price: 45000,  cost: 18000,  stock: 3,  unit: "und", description: "Camiseta 100% algodón talla M" },
-  { id: 3, name: "Arroz Premium 5kg",   sku: "ALIM-001", category: "Alimentos",   price: 28000,  cost: 20000,  stock: 30, unit: "kg",  description: "Arroz de grano largo premium" },
-  { id: 4, name: "Lámpara LED",         sku: "HOG-001",  category: "Hogar",       price: 65000,  cost: 32000,  stock: 2,  unit: "und", description: "Lámpara de escritorio LED regulable" },
+const defaultDB = {
+  products: [
+    { id:1, name:"Audífonos Bluetooth", sku:"ELEC-001", categoryId:1, providerId:1, price:350000, cost:180000, stock:12, unit:"und", description:"Audífonos inalámbricos con cancelación de ruido" },
+    { id:2, name:"Camiseta Básica",     sku:"ROPA-001", categoryId:2, providerId:2, price:45000,  cost:18000,  stock:3,  unit:"und", description:"Camiseta 100% algodón talla M" },
+    { id:3, name:"Arroz Premium 5kg",   sku:"ALIM-001", categoryId:3, providerId:1, price:28000,  cost:20000,  stock:30, unit:"kg",  description:"Arroz de grano largo premium" },
+    { id:4, name:"Lámpara LED",         sku:"HOG-001",  categoryId:4, providerId:3, price:65000,  cost:32000,  stock:2,  unit:"und", description:"Lámpara de escritorio LED regulable" },
+  ],
+  categories: [
+    { id:1, name:"Electrónica" },
+    { id:2, name:"Ropa" },
+    { id:3, name:"Alimentos" },
+    { id:4, name:"Hogar" },
+    { id:5, name:"Otro" },
+  ],
+  clients: [
+    { id:1, name:"Juan Pérez",    phone:"300-1111111", email:"juan@mail.com",    address:"Cra 5 #10-20, Barranquilla" },
+    { id:2, name:"María García",  phone:"301-2222222", email:"maria@mail.com",   address:"Cll 72 #46-30, Bogotá" },
+  ],
+  providers: [
+    { id:1, name:"TechDistrib S.A.S", phone:"605-3001001", email:"ventas@techdistrib.co", contact:"Carlos Ríos",   notes:"Entrega en 3 días hábiles" },
+    { id:2, name:"TextilAndes",       phone:"604-3002002", email:"pedidos@textilandes.co", contact:"Ana Torres",   notes:"Mínimo 10 unidades" },
+    { id:3, name:"LumiCo",            phone:"601-3003003", email:"info@lumico.co",          contact:"Pedro Soto",  notes:"Pago anticipado" },
+  ],
+  paymentMethods: [
+    { id:1, name:"Efectivo",         icon:"💵" },
+    { id:2, name:"Tarjeta débito",   icon:"💳" },
+    { id:3, name:"Tarjeta crédito",  icon:"💳" },
+    { id:4, name:"Transferencia",    icon:"🏦" },
+    { id:5, name:"Nequi / Daviplata",icon:"📱" },
+  ],
+  orders: [],
+  movements: [],
+  deliveries: [],
+  settings: {
+    businessName: "Mi Negocio",
+    businessPhone: "",
+    businessAddress: "",
+    lowStockThreshold: 5,
+    currency: "COP",
+  },
+  _seq: { product:5, category:6, client:3, provider:4, paymentMethod:6, order:1, movement:1, delivery:1 },
+};
+
+const loadDB = () => {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (raw) return { ...defaultDB, ...JSON.parse(raw) };
+  } catch {}
+  return defaultDB;
+};
+
+const saveDB = (db) => {
+  try { localStorage.setItem(DB_KEY, JSON.stringify(db)); } catch {}
+};
+
+const nextSeq = (db, key) => {
+  const id = db._seq[key];
+  return { id, db: { ...db, _seq: { ...db._seq, [key]: id + 1 } } };
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const ORDER_STATES = ["Pendiente", "En proceso", "Enviado", "Entregado"];
+const ORDER_STATE_COLORS = {
+  "Pendiente":   { bg:"#fef9c3", text:"#a16207", dot:"#f59e0b" },
+  "En proceso":  { bg:"#dbeafe", text:"#1d4ed8", dot:"#3b82f6" },
+  "Enviado":     { bg:"#ede9fe", text:"#6d28d9", dot:"#8b5cf6" },
+  "Entregado":   { bg:"#dcfce7", text:"#15803d", dot:"#22c55e" },
+  "Cancelado":   { bg:"#fee2e2", text:"#b91c1c", dot:"#ef4444" },
+};
+
+const NAV_GROUPS = [
+  { label: "Principal",      items: ["Dashboard","Pedidos","Inventario","Movimientos"] },
+  { label: "Clientes",       items: ["Clientes","Domicilios"] },
+  { label: "Reportes",       items: ["Reportes","Alertas"] },
+  { label: "Configuración",  items: ["Productos·Config","Categorías","Proveedores","Métodos de pago","Ajustes"] },
 ];
 
-let nextId = 5, invoiceCounter = 1, deliveryId = 1;
+const NAV_ICONS = {
+  Dashboard:"📊", Pedidos:"🛒", Inventario:"📦", Movimientos:"🔄",
+  Clientes:"👥", Domicilios:"🛵", Reportes:"📈", Alertas:"🔔",
+  "Productos·Config":"📦", Categorías:"🏷️", Proveedores:"🏭",
+  "Métodos de pago":"💳", Ajustes:"⚙️",
+};
 
-const formatCOP = (val) =>
-  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(val || 0);
+const ALL_TABS = NAV_GROUPS.flatMap(g => g.items);
 
-// ── jsPDF ────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+const formatCOP = (v) => new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(v||0);
+const today = () => new Date().toLocaleDateString("es-CO");
+const nowStr = () => new Date().toLocaleString("es-CO");
+
+// ═══════════════════════════════════════════════════════════════
+//  PDF
+// ═══════════════════════════════════════════════════════════════
 let jsPDFLoaded = false;
 const loadJsPDF = () => new Promise((resolve) => {
   if (window.jspdf) { resolve(window.jspdf.jsPDF); return; }
-  if (jsPDFLoaded) { const t = setInterval(() => { if (window.jspdf) { clearInterval(t); resolve(window.jspdf.jsPDF); } }, 50); return; }
+  if (jsPDFLoaded) { const t = setInterval(()=>{if(window.jspdf){clearInterval(t);resolve(window.jspdf.jsPDF);}},50); return; }
   jsPDFLoaded = true;
   const s = document.createElement("script");
   s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
@@ -46,1147 +129,617 @@ const loadJsPDF = () => new Promise((resolve) => {
   document.head.appendChild(s);
 });
 
-const generateInvoicePDF = async (items, opts) => {
+const generateInvoicePDF = async (items, opts, invoiceNum) => {
   const JsPDF = await loadJsPDF();
-  const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const W = 210, M = 18;
-  const invoiceNum = String(invoiceCounter++).padStart(5, "0");
-  const date = new Date().toLocaleString("es-CO");
-  const PURPLE=[99,102,241], DARK=[15,23,42], GRAY=[100,116,139], LIGHT=[241,245,249], WHITE=[255,255,255], GREEN=[16,185,129], RED=[239,68,68];
-  const typeColor = opts.type === "entrada" ? GREEN : opts.type === "salida" ? RED : PURPLE;
-
+  const doc = new JsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,M=18,date=nowStr();
+  const DARK=[15,23,42],GRAY=[100,116,139],LIGHT=[241,245,249],WHITE=[255,255,255],RED=[239,68,68],PURPLE=[99,102,241];
   doc.setFillColor(...DARK); doc.rect(0,0,W,44,"F");
-  doc.setFillColor(...typeColor); doc.rect(0,0,5,44,"F");
-  doc.setFont("helvetica","bold"); doc.setFontSize(30); doc.setTextColor(...WHITE);
-  doc.text("FACTURA", M+4, 22);
-  doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.text(`N\u00B0 ${invoiceNum}`, W-M, 18, {align:"right"});
+  doc.setFillColor(...RED);  doc.rect(0,0,5,44,"F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(28); doc.setTextColor(...WHITE);
+  doc.text("FACTURA", M+4, 21);
+  doc.setFontSize(12); doc.text(`N\u00B0 ${invoiceNum}`, W-M, 18, {align:"right"});
   doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(180,190,210);
   doc.text(`Fecha: ${date}`, W-M, 27, {align:"right"});
-
-  let y = 54;
-  doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(...GRAY);
-  doc.text("TIPO", M, y); doc.text("REFERENCIA / NOTA", M+35, y);
-  if (opts.delivery?.name) doc.text("DATOS DOMICILIO", W/2+5, y);
-  y += 5;
-  doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(...typeColor);
-  doc.text(opts.type === "entrada" ? "Entrada" : opts.type === "salida" ? "Salida" : "Ajuste", M, y);
-  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(...DARK);
-  doc.text(opts.note || "Sin referencia", M+35, y);
-  if (opts.delivery?.name) {
-    const dl = opts.delivery;
-    doc.setFontSize(8.5); doc.text(dl.name, W/2+5, y);
-    if (dl.address) doc.text(`Dir: ${dl.address}`, W/2+5, y+5);
-    if (dl.phone)   doc.text(`Tel: ${dl.phone}`, W/2+5, y+10);
-    if (dl.value)   { doc.setTextColor(...typeColor); doc.setFont("helvetica","bold"); doc.text(`Dom: ${formatCOP(dl.value)}`, W/2+5, y+15); }
+  if (opts.clientName) { doc.setTextColor(...WHITE); doc.setFontSize(9); doc.text(`Cliente: ${opts.clientName}`, M+4, 30); }
+  if (opts.paymentMethod) { doc.setTextColor(180,190,210); doc.setFontSize(8); doc.text(`Pago: ${opts.paymentMethod}`, M+4, 37); }
+  let y=54;
+  if (opts.note) {
+    doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(...GRAY); doc.text("REFERENCIA:", M, y);
+    doc.setFont("helvetica","normal"); doc.setTextColor(...DARK); doc.text(opts.note, M+30, y); y+=8;
   }
-  y += 16;
-  doc.setDrawColor(...LIGHT); doc.setLineWidth(0.5); doc.line(M,y,W-M,y);
-  y += 7;
+  doc.setDrawColor(...LIGHT); doc.setLineWidth(0.4); doc.line(M,y,W-M,y); y+=7;
   doc.setFillColor(...DARK); doc.roundedRect(M,y,W-M*2,10,2,2,"F");
   doc.setTextColor(...WHITE); doc.setFont("helvetica","bold"); doc.setFontSize(8);
-  const C = {num:M+3,name:M+9,sku:M+68,qty:M+104,unit:M+119,vUnit:M+134,vTot:W-M-2};
+  const C={num:M+2,name:M+8,sku:M+68,qty:M+103,unit:M+118,vUnit:M+133,vTot:W-M-2};
   doc.text("#",C.num,y+7); doc.text("PRODUCTO",C.name,y+7); doc.text("SKU",C.sku,y+7);
-  doc.text("CANT.",C.qty,y+7); doc.text("UNID.",C.unit,y+7); doc.text("V. UNITARIO",C.vUnit,y+7); doc.text("V. TOTAL",C.vTot,y+7,{align:"right"});
-  y += 10;
-  let subtotal = 0;
-  items.forEach(({product,qty},idx) => {
-    const vt = product.price * qty; subtotal += vt;
-    doc.setFillColor(...(idx%2===0 ? LIGHT : [248,250,252])); doc.rect(M,y,W-M*2,12,"F");
+  doc.text("CANT.",C.qty,y+7); doc.text("UNID.",C.unit,y+7); doc.text("V.UNIT.",C.vUnit,y+7); doc.text("V.TOTAL",C.vTot,y+7,{align:"right"});
+  y+=10;
+  let subtotal=0;
+  items.forEach(({product,qty},i)=>{
+    const vt=product.price*qty; subtotal+=vt;
+    doc.setFillColor(...(i%2===0?LIGHT:[248,250,252])); doc.rect(M,y,W-M*2,12,"F");
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5); doc.setTextColor(...DARK);
-    doc.text(String(idx+1),C.num,y+8); doc.text(product.name,C.name,y+8);
+    doc.text(String(i+1),C.num,y+8); doc.text(product.name,C.name,y+8);
     doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...GRAY);
     doc.text(product.sku,C.sku,y+8); doc.setTextColor(...DARK);
     doc.text(String(qty),C.qty,y+8); doc.text(product.unit,C.unit,y+8);
     doc.text(formatCOP(product.price),C.vUnit,y+8);
-    doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...typeColor);
+    doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...RED);
     doc.text(formatCOP(vt),C.vTot,y+8,{align:"right"}); y+=12;
-    if (product.description) {
-      doc.setFillColor(250,250,253); doc.rect(M,y,W-M*2,7,"F");
-      doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor(...GRAY);
-      doc.text(`   ${product.description}`,C.name,y+5); y+=7;
-    }
   });
-  doc.setDrawColor(...LIGHT); doc.setLineWidth(0.3); doc.line(M,y,W-M,y);
-  y += 10;
-  const bx=W/2+10, discount=Number(opts.discount)||0, deliveryVal=(opts.delivery&&Number(opts.delivery.value))||0, grandTotal=subtotal-discount+deliveryVal;
-  const rowT=(label,val,color=DARK)=>{ doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(...GRAY); doc.text(label,bx,y); doc.setTextColor(...color); doc.text(formatCOP(val),W-M,y,{align:"right"}); y+=6; };
-  rowT("Subtotal:",subtotal);
-  if(discount>0) rowT("Descuento:",-discount,RED);
-  if(deliveryVal>0) rowT("Domicilio:",deliveryVal);
-  doc.setDrawColor(...typeColor); doc.setLineWidth(0.7); doc.line(bx,y,W-M,y); y+=3;
-  doc.setFillColor(...typeColor); doc.roundedRect(bx,y,W-M-bx,14,2,2,"F");
-  doc.setTextColor(...WHITE); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.text("VALOR TOTAL:",bx+3,y+9);
-  doc.setFontSize(12); doc.text(formatCOP(grandTotal),W-M-3,y+9,{align:"right"});
+  doc.setDrawColor(...LIGHT); doc.setLineWidth(0.3); doc.line(M,y,W-M,y); y+=10;
+  const bx=W/2+10, disc=Number(opts.discount)||0, dv=Number(opts.deliveryVal)||0, total=subtotal-disc+dv;
+  const rw=(l,v,c=DARK)=>{doc.setFont("helvetica","normal");doc.setFontSize(9);doc.setTextColor(...GRAY);doc.text(l,bx,y);doc.setTextColor(...c);doc.text(formatCOP(v),W-M,y,{align:"right"});y+=6;};
+  rw("Subtotal:",subtotal); if(disc>0)rw("Descuento:",-disc,RED); if(dv>0)rw("Domicilio:",dv);
+  doc.setDrawColor(...RED); doc.setLineWidth(0.7); doc.line(bx,y,W-M,y); y+=3;
+  doc.setFillColor(...RED); doc.roundedRect(bx,y,W-M-bx,14,2,2,"F");
+  doc.setTextColor(...WHITE); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.text("TOTAL:",bx+3,y+9);
+  doc.setFontSize(12); doc.text(formatCOP(total),W-M-3,y+9,{align:"right"});
   doc.setFillColor(...DARK); doc.rect(0,277,W,20,"F");
-  doc.setFillColor(...typeColor); doc.rect(0,277,5,20,"F");
+  doc.setFillColor(...RED); doc.rect(0,277,5,20,"F");
   doc.setTextColor(180,190,210); doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
-  doc.text(`InvenPro  \u00B7  Factura N\u00B0 ${invoiceNum}  \u00B7  ${date}`, W/2, 289, {align:"center"});
+  doc.text(`InvenPro  \u00B7  Factura N\u00B0 ${invoiceNum}  \u00B7  ${date}`,W/2,289,{align:"center"});
   doc.save(`Factura-${invoiceNum}.pdf`);
 };
 
-// ── UI helpers ───────────────────────────────────────────────────────────────
-const Badge = ({ children, color }) => {
-  const C = { green:["#dcfce7","#15803d"], red:["#fee2e2","#b91c1c"], yellow:["#fef9c3","#a16207"], blue:["#dbeafe","#1d4ed8"], gray:["#f3f4f6","#374151"] };
-  const [bg,text] = C[color]||C.gray;
-  return <span style={{background:bg,color:text,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
+// ═══════════════════════════════════════════════════════════════
+//  UI ATOMS
+// ═══════════════════════════════════════════════════════════════
+const Badge = ({children,color="gray"}) => {
+  const C={green:["#dcfce7","#15803d"],red:["#fee2e2","#b91c1c"],yellow:["#fef9c3","#a16207"],blue:["#dbeafe","#1d4ed8"],purple:["#ede9fe","#6d28d9"],gray:["#f3f4f6","#374151"]};
+  const [bg,tc]=C[color]||C.gray;
+  return <span style={{background:bg,color:tc,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{children}</span>;
 };
 
-const Modal = ({ title, onClose, children, maxWidth=520 }) => (
-  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.65)",zIndex:2000,display:"flex",alignItems:"flex-start",justifyContent:"center",backdropFilter:"blur(4px)",overflowY:"auto",padding:"16px 12px",WebkitOverflowScrolling:"touch"}}>
-    <div style={{background:"#fff",borderRadius:16,padding:"22px 20px",width:"100%",maxWidth,boxShadow:"0 24px 80px rgba(0,0,0,0.25)",margin:"auto",boxSizing:"border-box"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-        <h2 style={{margin:0,fontSize:17,fontWeight:800,color:"#0f172a"}}>{title}</h2>
-        <button onClick={onClose} style={{background:"#f1f5f9",border:"none",borderRadius:8,width:34,height:34,cursor:"pointer",fontSize:20,color:"#64748b",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+const Modal = ({title,onClose,children,maxWidth=540}) => (
+  <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.65)",zIndex:3000,display:"flex",alignItems:"flex-start",justifyContent:"center",backdropFilter:"blur(4px)",overflowY:"auto",padding:"16px 12px"}}>
+    <div style={{background:"#fff",borderRadius:16,padding:"22px 22px",width:"100%",maxWidth,boxShadow:"0 24px 80px rgba(0,0,0,0.25)",margin:"auto",boxSizing:"border-box"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+        <h2 style={{margin:0,fontSize:16,fontWeight:800,color:"#0f172a"}}>{title}</h2>
+        <button onClick={onClose} style={{background:"#f1f5f9",border:"none",borderRadius:8,width:32,height:32,cursor:"pointer",fontSize:20,color:"#64748b"}}>×</button>
       </div>
       {children}
     </div>
   </div>
 );
 
-const Inp = ({ label, ...p }) => (
+const Inp = ({label,...p}) => (
   <div style={{marginBottom:12}}>
-    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
-    <input {...p} style={{width:"100%",padding:"10px 13px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:16,color:"#0f172a",outline:"none",boxSizing:"border-box",background:"#f8fafc",...p.style}} />
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
+    <input {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,color:"#0f172a",outline:"none",boxSizing:"border-box",background:"#f8fafc",...p.style}}/>
   </div>
 );
 
-const Sel = ({ label, options, ...p }) => (
+const Sel = ({label,options,...p}) => (
   <div style={{marginBottom:12}}>
-    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
-    <select {...p} style={{width:"100%",padding:"10px 13px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:16,color:"#0f172a",background:"#f8fafc",outline:"none",boxSizing:"border-box"}}>
-      {options.map(o => <option key={o} value={o}>{o}</option>)}
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:"#475569",marginBottom:4}}>{label}</label>}
+    <select {...p} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,color:"#0f172a",background:"#f8fafc",outline:"none",boxSizing:"border-box"}}>
+      {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
     </select>
   </div>
 );
 
-// ── ProductForm ───────────────────────────────────────────────────────────────
-const ProductForm = ({ initial, onSave, onClose, categories }) => {
-  const [f, setF] = useState(initial || { name:"", sku:"", category:categories[0]||"Otro", price:"", cost:"", stock:"", unit:"und", description:"" });
-  const set = (k,v) => setF(x=>({...x,[k]:v}));
-  return (
-    <div>
-      <Inp label="Nombre *"       value={f.name}        onChange={e=>set("name",e.target.value)}        placeholder="Producto" />
-      <Inp label="SKU / Código *" value={f.sku}         onChange={e=>set("sku",e.target.value)}         placeholder="SKU-001" />
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-        <Sel label="Categoría"    value={f.category}    onChange={e=>set("category",e.target.value)}    options={categories} />
-        <Inp label="Unidad"       value={f.unit}        onChange={e=>set("unit",e.target.value)}        placeholder="und, kg…" />
-        <Inp label="Precio venta *" type="number"       value={f.price}  onChange={e=>set("price",e.target.value)}  placeholder="0" />
-        <Inp label="Costo"          type="number"       value={f.cost}   onChange={e=>set("cost",e.target.value)}   placeholder="0" />
-        <Inp label="Stock actual *" type="number"       value={f.stock}  onChange={e=>set("stock",e.target.value)}  placeholder="0" />
+const Btn = ({children,variant="primary",size="md",...p}) => {
+  const bg={primary:"linear-gradient(135deg,#6366f1,#8b5cf6)",danger:"#fee2e2",secondary:"#f1f5f9",green:"linear-gradient(135deg,#10b981,#059669)"};
+  const col={primary:"#fff",danger:"#b91c1c",secondary:"#334155",green:"#fff"};
+  const pad={md:"10px 18px",sm:"7px 13px",lg:"12px 24px"};
+  return <button {...p} style={{padding:pad[size],borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:size==="sm"?12:14,background:bg[variant],color:col[variant],boxShadow:variant==="primary"||variant==="green"?"0 3px 10px rgba(99,102,241,0.25)":"none",opacity:p.disabled?0.6:1,...p.style}}>{children}</button>;
+};
+
+const EmptyState = ({icon,text}) => (
+  <div style={{padding:"44px 16px",textAlign:"center",color:"#94a3b8"}}>
+    <div style={{fontSize:36,marginBottom:8}}>{icon}</div>
+    <div style={{fontSize:13}}>{text}</div>
+  </div>
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  SIDEBAR
+// ═══════════════════════════════════════════════════════════════
+const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile}) => {
+  const lowStock = db.products.filter(p=>p.stock<=(db.settings.lowStockThreshold||5)).length;
+  const pendingOrders = db.orders.filter(o=>o.state==="Pendiente").length;
+
+  const content = (
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {/* Logo */}
+      <div style={{padding:"20px 18px 16px",borderBottom:"1px solid #1e293b"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:900,color:"#fff",letterSpacing:-0.5}}>📦 InvenPro</div>
+            <div style={{fontSize:10,color:"#64748b",marginTop:1}}>{db.settings.businessName}</div>
+          </div>
+          {isMobile&&<button onClick={()=>setSideOpen(false)} style={{background:"none",border:"none",color:"#64748b",fontSize:20,cursor:"pointer"}}>×</button>}
+        </div>
       </div>
-      <Inp label="Descripción" value={f.description} onChange={e=>set("description",e.target.value)} placeholder="Opcional" />
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
-        <button onClick={onClose} style={{padding:"10px 18px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#f8fafc",cursor:"pointer",fontWeight:600,color:"#64748b",fontSize:14}}>Cancelar</button>
-        <button onClick={()=>{ if(!f.name||!f.sku||!f.price||f.stock==="") return alert("Campos requeridos incompletos."); onSave({...f,price:+f.price,cost:+f.cost,stock:+f.stock}); }}
-          style={{padding:"10px 22px",borderRadius:9,border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:14}}>
-          {initial?"Guardar":"Agregar"}
-        </button>
+
+      {/* Nav groups */}
+      <nav style={{flex:1,overflowY:"auto",padding:"10px 10px"}}>
+        {NAV_GROUPS.map(group=>(
+          <div key={group.label} style={{marginBottom:6}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#334155",letterSpacing:1,textTransform:"uppercase",padding:"6px 8px 4px"}}>{group.label}</div>
+            {group.items.map(t=>{
+              const active = tab===t;
+              const badge = t==="Alertas"&&lowStock>0?lowStock : t==="Pedidos"&&pendingOrders>0?pendingOrders : null;
+              return (
+                <button key={t} onClick={()=>{setTab(t);if(isMobile)setSideOpen(false);}} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 10px",borderRadius:9,cursor:"pointer",marginBottom:2,background:active?"linear-gradient(135deg,#6366f1,#8b5cf6)":"transparent",color:active?"#fff":"#94a3b8",fontWeight:active?700:500,fontSize:13,border:"none",width:"100%",textAlign:"left"}}>
+                  <span style={{fontSize:15}}>{NAV_ICONS[t]}</span>
+                  <span style={{flex:1}}>{t.replace("·Config","")}</span>
+                  {badge&&<span style={{background:active?"rgba(255,255,255,0.3)":"#ef4444",color:"#fff",borderRadius:20,padding:"0 6px",fontSize:10,fontWeight:800,lineHeight:"18px"}}>{badge}</span>}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      <div style={{padding:"10px 14px",fontSize:10,color:"#334155",borderTop:"1px solid #1e293b"}}>
+        {db.products.length} productos · {db.clients.length} clientes
       </div>
     </div>
   );
+
+  if (isMobile) {
+    if (!sideOpen) return null;
+    return (
+      <>
+        <div onClick={()=>setSideOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:1500}}/>
+        <aside style={{position:"fixed",top:0,left:0,bottom:0,width:240,background:"#0f172a",zIndex:1600,overflowY:"auto"}}>
+          {content}
+        </aside>
+      </>
+    );
+  }
+
+  return (
+    <aside style={{width:220,background:"#0f172a",minHeight:"100vh",position:"fixed",top:0,left:0,bottom:0,overflowY:"auto",zIndex:100}}>
+      {content}
+    </aside>
+  );
 };
 
-// ── MovementModal ─────────────────────────────────────────────────────────────
-const MovementModal = ({ preProduct, allProducts, onClose, onSave }) => {
-  const isMobile = useIsMobile();
-  const [lines,    setLines]    = useState(preProduct ? [{productId:preProduct.id,qty:""}] : [{productId:"",qty:""}]);
-  const [type,     setType]     = useState("salida");
-  const [note,     setNote]     = useState("");
-  const [discount, setDiscount] = useState("");
-  const [delivery, setDelivery] = useState({name:"",address:"",phone:"",value:""});
-  const [generating, setGen]    = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+// ═══════════════════════════════════════════════════════════════
+//  STYLES FACTORY
+// ═══════════════════════════════════════════════════════════════
+const makeStyles = (isMobile) => ({
+  main:     {marginLeft:isMobile?0:220,padding:isMobile?"12px 12px 80px":"26px 28px",minHeight:"100vh"},
+  header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10},
+  title:    {fontSize:isMobile?18:22,fontWeight:900,color:"#0f172a",margin:0},
+  kpiGrid:  (cols)=>({display:"grid",gridTemplateColumns:`repeat(${isMobile?Math.min(cols,2):cols},1fr)`,gap:12,marginBottom:18}),
+  kpiCard:  (c)=>({background:"#fff",borderRadius:12,padding:isMobile?"12px 14px":"16px 18px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`4px solid ${c}`}),
+  kpiVal:   {fontSize:isMobile?18:24,fontWeight:900,color:"#0f172a",lineHeight:1.1,marginBottom:3},
+  kpiLabel: {fontSize:isMobile?10:12,color:"#64748b",fontWeight:500},
+  card:     {background:"#fff",borderRadius:13,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",overflow:"hidden",marginBottom:16},
+  tHead:    (cols)=>({display:"grid",gridTemplateColumns:cols,padding:"8px 16px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}),
+  tRow:     (cols)=>({display:"grid",gridTemplateColumns:cols,alignItems:"center",padding:"11px 16px",borderBottom:"1px solid #f1f5f9"}),
+  th:       {fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.6},
+  toolbar:  {display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"},
+  searchW:  {position:"relative",flex:1,minWidth:140},
+  searchI:  {width:"100%",padding:"9px 14px 9px 34px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,outline:"none",background:"#f8fafc",color:"#0f172a",boxSizing:"border-box"},
+  iconBtn:  {background:"none",border:"none",cursor:"pointer",padding:"6px 7px",borderRadius:8,fontSize:16},
+  bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"#0f172a",zIndex:500,display:"flex",borderTop:"1px solid #1e293b",paddingBottom:"env(safe-area-inset-bottom,0)"},
+  bottomBtn:(a)=>({flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 2px 6px",border:"none",background:"transparent",cursor:"pointer",color:a?"#818cf8":"#64748b",fontSize:9,fontWeight:a?700:500,gap:2,minWidth:0}),
+});
 
-  const addLine    = () => setLines(l=>[...l,{productId:"",qty:""}]);
-  const removeLine = (i) => setLines(l=>l.filter((_,idx)=>idx!==i));
-  const setLine    = (i,k,v) => setLines(l=>l.map((r,idx)=>idx===i?{...r,[k]:v}:r));
+// ═══════════════════════════════════════════════════════════════
+//  ORDERS MODULE
+// ═══════════════════════════════════════════════════════════════
+const OrderForm = ({db,setDB,onClose,initial}) => {
+  const [lines,   setLines]   = useState(initial?.items||[{productId:"",qty:""}]);
+  const [clientId,setClientId]= useState(initial?.clientId||"");
+  const [pmId,    setPmId]    = useState(initial?.paymentMethodId||"");
+  const [note,    setNote]    = useState(initial?.note||"");
+  const [discount,setDiscount]= useState(initial?.discount||"");
+  const [delivery,setDelivery]= useState(initial?.delivery||{name:"",address:"",phone:"",value:""});
 
-  const resolvedLines = lines.map(r=>({product:allProducts.find(p=>p.id===Number(r.productId)),qty:Number(r.qty)})).filter(r=>r.product&&r.qty>0);
-  const subtotal    = resolvedLines.reduce((s,r)=>s+r.product.price*r.qty,0);
-  const discountVal = Number(discount)||0;
-  const deliveryVal = Number(delivery.value)||0;
-  const grandTotal  = subtotal-discountVal+deliveryVal;
+  const addLine    = ()=>setLines(l=>[...l,{productId:"",qty:""}]);
+  const removeLine = (i)=>setLines(l=>l.filter((_,idx)=>idx!==i));
+  const setLine    = (i,k,v)=>setLines(l=>l.map((r,idx)=>idx===i?{...r,[k]:v}:r));
 
-  const typeColors = {
-    entrada:{border:"#15803d",bg:"#dcfce7",text:"#15803d",accent:"#4ade80"},
-    salida: {border:"#b91c1c",bg:"#fee2e2",text:"#b91c1c",accent:"#f87171"},
-    ajuste: {border:"#1d4ed8",bg:"#dbeafe",text:"#1d4ed8",accent:"#818cf8"},
-  };
-  const tc = typeColors[type];
+  const resolved = lines.map(r=>({product:db.products.find(p=>p.id===Number(r.productId)),qty:Number(r.qty)})).filter(r=>r.product&&r.qty>0);
+  const subtotal = resolved.reduce((s,r)=>s+r.product.price*r.qty,0);
+  const dv = Number(delivery.value)||0;
+  const disc = Number(discount)||0;
+  const total = subtotal-disc+dv;
 
-  const handleSave = async () => {
-    if(resolvedLines.length===0) return alert("Agrega al menos un producto con cantidad válida.");
-    for(const {product,qty} of resolvedLines) if(type==="salida"&&qty>product.stock) return alert(`Stock insuficiente para "${product.name}".`);
-    onSave(resolvedLines,type,note,discount,delivery);
-    if(type==="salida"){
-      setGen(true);
-      try { await generateInvoicePDF(resolvedLines,{type,note,discount:discountVal,delivery}); } catch(e){ console.error(e); }
-      setGen(false);
+  const handleSave = ()=>{
+    if(resolved.length===0) return alert("Agrega al menos un producto.");
+    if(initial){
+      setDB(db=>{ const d={...db,orders:db.orders.map(o=>o.id===initial.id?{...o,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total,updatedAt:nowStr()}:o)}; saveDB(d); return d; });
+    } else {
+      setDB(db=>{ const {id,db:d2}=nextSeq(db,"order"); const order={id,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total,state:"Pendiente",createdAt:nowStr(),updatedAt:nowStr()}; const d3={...d2,orders:[order,...d2.orders]}; saveDB(d3); return d3; });
     }
     onClose();
   };
 
-  const sec = (t) => <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8,marginTop:14}}>{t}</div>;
-
-  // Preview panel (shared between mobile and desktop)
-  const previewPanel = (
-    <div style={{background:"#0f172a",borderRadius:14,overflow:"hidden",fontSize:12}}>
-      <div style={{background:tc.border,padding:"10px 14px 8px"}}>
-        <div style={{color:"#fff",fontWeight:900,fontSize:16}}>FACTURA</div>
-        <div style={{color:"rgba(255,255,255,0.65)",fontSize:9,marginTop:1}}>
-          {type==="salida"?"📄 PDF al confirmar":"ℹ️ Solo salidas generan factura"}
-        </div>
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+        <Sel label="Cliente" value={clientId} onChange={e=>setClientId(e.target.value)}
+          options={[{value:"",label:"— Sin cliente —"},...db.clients.map(c=>({value:c.id,label:c.name}))]}/>
+        <Sel label="Método de pago" value={pmId} onChange={e=>setPmId(e.target.value)}
+          options={[{value:"",label:"— Selecciona —"},...db.paymentMethods.map(p=>({value:p.id,label:`${p.icon} ${p.name}`}))]}/>
       </div>
-      <div style={{padding:"12px 14px"}}>
-        <div style={{marginBottom:8}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:"0 8px",marginBottom:5}}>
-            <span style={{fontSize:9,color:"#64748b",fontWeight:700}}>PRODUCTO</span>
-            <span style={{fontSize:9,color:"#64748b",fontWeight:700,textAlign:"right"}}>V.UNIT.</span>
-            <span style={{fontSize:9,color:"#64748b",fontWeight:700,textAlign:"right"}}>V.TOTAL</span>
-          </div>
-          {resolvedLines.length===0
-            ? <div style={{color:"#475569",fontSize:11,padding:"4px 0"}}>Sin productos aún…</div>
-            : resolvedLines.map(({product,qty},i)=>(
-              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:"0 8px",padding:"5px 7px",background:i%2===0?"#1e293b":"#162032",borderRadius:6,marginBottom:3}}>
-                <span style={{fontSize:11,color:"#fff",fontWeight:600}}>{product.name}<br/><span style={{color:"#64748b",fontWeight:400,fontSize:9}}>{qty} {product.unit}</span></span>
-                <span style={{fontSize:10,color:"#94a3b8",textAlign:"right",alignSelf:"center"}}>{formatCOP(product.price)}</span>
-                <span style={{fontSize:11,color:tc.accent,fontWeight:700,textAlign:"right",alignSelf:"center"}}>{formatCOP(product.price*qty)}</span>
+
+      <div style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,margin:"10px 0 8px"}}>📦 Productos</div>
+      {lines.map((line,idx)=>{
+        const prod=db.products.find(p=>p.id===Number(line.productId));
+        return (
+          <div key={idx} style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:8}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 80px 30px",gap:8,alignItems:"end"}}>
+              <div>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Producto</label>
+                <select value={line.productId} onChange={e=>setLine(idx,"productId",e.target.value)}
+                  style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"#fff",outline:"none"}}>
+                  <option value="">— Selecciona —</option>
+                  {db.products.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stock} {p.unit}</option>)}
+                </select>
+                {prod&&<div style={{fontSize:10,color:"#6366f1",fontWeight:600,marginTop:3}}>{prod.sku} · {formatCOP(prod.price)} · Stock: {prod.stock}</div>}
               </div>
-            ))
-          }
-        </div>
-        {resolvedLines.length>0&&(
-          <>
-            <div style={{height:1,background:"#1e293b",margin:"6px 0"}}/>
-            {[["Subtotal",subtotal,"#94a3b8"],discountVal>0?["Descuento",-discountVal,"#f87171"]:null,deliveryVal>0?["Domicilio",deliveryVal,"#94a3b8"]:null].filter(Boolean).map(([l,v,c])=>(
-              <div key={l} style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}>
-                <span style={{color:"#64748b"}}>{l}:</span><span style={{color:c,fontWeight:600}}>{formatCOP(v)}</span>
+              <div>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Cant.</label>
+                <input type="number" value={line.qty} onChange={e=>setLine(idx,"qty",e.target.value)} placeholder="0"
+                  style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,fontWeight:700,color:"#0f172a",outline:"none",background:"#fff",boxSizing:"border-box"}}/>
               </div>
-            ))}
-            <div style={{height:1,background:tc.border,margin:"5px 0"}}/>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 9px",background:tc.border,borderRadius:8,marginTop:3}}>
-              <span style={{color:"#fff",fontSize:10,fontWeight:700}}>TOTAL</span>
-              <span style={{color:"#fff",fontWeight:900,fontSize:15}}>{formatCOP(grandTotal)}</span>
+              <button onClick={()=>removeLine(idx)} disabled={lines.length===1}
+                style={{padding:"8px",borderRadius:8,border:"none",background:lines.length===1?"#f1f5f9":"#fee2e2",color:lines.length===1?"#cbd5e1":"#b91c1c",cursor:lines.length===1?"not-allowed":"pointer",fontSize:15,fontWeight:700,alignSelf:"end"}}>×</button>
             </div>
-          </>
-        )}
-        {delivery.name&&(
-          <div style={{marginTop:8,background:"#1e293b",borderRadius:8,padding:"7px 9px",fontSize:10}}>
-            <div style={{color:"#64748b",fontWeight:700,marginBottom:2}}>🛵 DOMICILIO</div>
-            {delivery.name&&<div style={{color:"#fff"}}>{delivery.name}</div>}
-            {delivery.address&&<div style={{color:"#94a3b8"}}>{delivery.address}</div>}
-            {delivery.phone&&<div style={{color:"#94a3b8"}}>{delivery.phone}</div>}
-            {delivery.value&&<div style={{color:tc.accent,fontWeight:700}}>{formatCOP(delivery.value)}</div>}
           </div>
-        )}
+        );
+      })}
+      <button onClick={addLine} style={{width:"100%",padding:"8px",borderRadius:8,border:"1.5px dashed #c7d2fe",background:"#eef2ff",color:"#6366f1",cursor:"pointer",fontWeight:700,fontSize:13,marginBottom:4}}>+ Agregar producto</button>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px",marginTop:10}}>
+        <Inp label="Nota / Referencia" value={note} onChange={e=>setNote(e.target.value)} placeholder="Nota del pedido…"/>
+        <Inp label="Descuento (COP)" type="number" value={discount} onChange={e=>setDiscount(e.target.value)} placeholder="0"/>
+      </div>
+
+      <div style={{fontSize:12,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,margin:"6px 0 8px"}}>🛵 Domicilio (opcional)</div>
+      <div style={{background:"#f8fafc",borderRadius:9,padding:"12px",border:"1.5px solid #e2e8f0"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
+          <Inp label="Nombre cliente" value={delivery.name}    onChange={e=>setDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
+          <Inp label="Teléfono"       value={delivery.phone}   onChange={e=>setDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
+        </div>
+        <Inp label="Dirección" value={delivery.address} onChange={e=>setDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
+        <Inp label="Valor domicilio" type="number" value={delivery.value} onChange={e=>setDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
+      </div>
+
+      {resolved.length>0&&(
+        <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:10,padding:"12px 16px",marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{color:"rgba(255,255,255,0.75)",fontSize:11}}>TOTAL DEL PEDIDO</div>
+          <div style={{color:"#fff",fontWeight:900,fontSize:20}}>{formatCOP(total)}</div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14,paddingTop:12,borderTop:"1px solid #f1f5f9"}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={handleSave}>{initial?"Guardar cambios":"Crear pedido"}</Btn>
       </div>
     </div>
   );
-
-  return (
-    <Modal title="Registrar movimiento" onClose={onClose} maxWidth={isMobile?460:860}>
-      {/* Tipo */}
-      <div style={{display:"flex",gap:8,marginBottom:14}}>
-        {[{key:"entrada",icon:"📥",label:"Entrada"},{key:"salida",icon:"📤",label:"Salida"},{key:"ajuste",icon:"🔄",label:"Ajuste"}].map(t=>(
-          <button key={t.key} onClick={()=>setType(t.key)} style={{flex:1,padding:"9px 0",borderRadius:9,border:type===t.key?`2px solid ${typeColors[t.key].border}`:"1.5px solid #e2e8f0",background:type===t.key?typeColors[t.key].bg:"#f8fafc",cursor:"pointer",fontWeight:700,color:type===t.key?typeColors[t.key].text:"#64748b",fontSize:12}}>
-            {t.icon}<br/>{t.label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 300px",gap:isMobile?0:20}}>
-        {/* Formulario */}
-        <div style={{overflowY:"auto",maxHeight:isMobile?"60vh":"65vh",paddingRight:4}}>
-          {sec("📦 Productos")}
-          {lines.map((line,idx)=>{
-            const prod = allProducts.find(p=>p.id===Number(line.productId));
-            return (
-              <div key={idx} style={{background:"#f8fafc",borderRadius:10,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:10}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 90px 32px",gap:8,alignItems:"end"}}>
-                  <div>
-                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Producto</label>
-                    <select value={line.productId} onChange={e=>setLine(idx,"productId",e.target.value)}
-                      style={{width:"100%",padding:"9px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"#fff",outline:"none"}}>
-                      <option value="">— Selecciona —</option>
-                      {allProducts.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stock} {p.unit}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Cant.</label>
-                    <input type="number" value={line.qty} onChange={e=>setLine(idx,"qty",e.target.value)} placeholder="0"
-                      style={{width:"100%",padding:"9px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,fontWeight:700,color:"#0f172a",outline:"none",background:"#fff",boxSizing:"border-box"}}/>
-                  </div>
-                  <button onClick={()=>removeLine(idx)} disabled={lines.length===1}
-                    style={{padding:"9px",borderRadius:8,border:"none",background:lines.length===1?"#f1f5f9":"#fee2e2",color:lines.length===1?"#cbd5e1":"#b91c1c",cursor:lines.length===1?"not-allowed":"pointer",fontSize:15,fontWeight:700,alignSelf:"end"}}>×</button>
-                </div>
-                {prod&&<div style={{fontSize:11,color:"#6366f1",fontWeight:600,marginTop:4}}>{prod.sku} · {formatCOP(prod.price)} · Stock: {prod.stock}</div>}
-              </div>
-            );
-          })}
-          <button onClick={addLine} style={{width:"100%",padding:"9px",borderRadius:9,border:"1.5px dashed #c7d2fe",background:"#eef2ff",color:"#6366f1",cursor:"pointer",fontWeight:700,fontSize:13,marginBottom:2}}>
-            + Agregar producto
-          </button>
-
-          {sec("📝 Referencia")}
-          <Inp label="" value={note} onChange={e=>setNote(e.target.value)} placeholder="Nota o referencia…" />
-
-          {sec("🏷️ Descuento")}
-          <Inp label="" type="number" value={discount} onChange={e=>setDiscount(e.target.value)} placeholder="0 (vacío si no aplica)" />
-
-          {sec("🛵 Domicilio (opcional)")}
-          <div style={{background:"#f8fafc",borderRadius:10,padding:"12px",border:"1.5px solid #e2e8f0"}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
-              <Inp label="Nombre cliente" value={delivery.name}    onChange={e=>setDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez" />
-              <Inp label="Teléfono"       value={delivery.phone}   onChange={e=>setDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…" />
-            </div>
-            <Inp label="Dirección"        value={delivery.address} onChange={e=>setDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…" />
-            <Inp label="Valor domicilio"  type="number" value={delivery.value} onChange={e=>setDelivery(d=>({...d,value:e.target.value}))} placeholder="0" />
-          </div>
-
-          {/* Preview colapsable en móvil */}
-          {isMobile&&(
-            <div style={{marginTop:14}}>
-              <button onClick={()=>setShowPreview(v=>!v)} style={{width:"100%",padding:"9px",borderRadius:9,border:"1.5px solid #1e293b",background:"#0f172a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:13}}>
-                {showPreview?"▲ Ocultar vista previa":"▼ Ver vista previa de factura"}
-              </button>
-              {showPreview&&<div style={{marginTop:10}}>{previewPanel}</div>}
-            </div>
-          )}
-        </div>
-
-        {/* Preview solo en desktop */}
-        {!isMobile&&(
-          <div style={{flexShrink:0}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>
-              {type==="salida"?"Vista previa · PDF":"Vista previa"}
-            </div>
-            {previewPanel}
-          </div>
-        )}
-      </div>
-
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16,paddingTop:14,borderTop:"1px solid #f1f5f9",flexWrap:"wrap"}}>
-        <button onClick={onClose} style={{padding:"10px 18px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#f8fafc",cursor:"pointer",fontWeight:600,color:"#64748b",fontSize:14}}>Cancelar</button>
-        <button onClick={handleSave} disabled={generating} style={{flex:1,minWidth:180,padding:"11px 18px",borderRadius:9,border:"none",background:generating?"#94a3b8":"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",cursor:generating?"not-allowed":"pointer",fontWeight:700,fontSize:14,boxShadow:generating?"none":"0 4px 14px rgba(99,102,241,0.3)"}}>
-          {generating?"⏳ Generando PDF…":type==="salida"?"✅ Confirmar y descargar factura":"✅ Confirmar movimiento"}
-        </button>
-      </div>
-    </Modal>
-  );
 };
 
-// ── CategoriesTab ─────────────────────────────────────────────────────────────
-const CategoriesTab = ({ categories, setCategories, products, setProducts, s }) => {
-  const [newCat,setNewCat]=useState(""); const [editIdx,setEditIdx]=useState(null); const [editVal,setEditVal]=useState("");
-  const addCat=()=>{ const t=newCat.trim(); if(!t)return; if(categories.includes(t))return alert("Ya existe."); setCategories(c=>[...c,t]); setNewCat(""); };
-  const startEdit=(idx)=>{setEditIdx(idx);setEditVal(categories[idx]);};
-  const saveEdit=()=>{ const t=editVal.trim(); if(!t)return; if(categories.some((c,i)=>c===t&&i!==editIdx))return alert("Ya existe."); const old=categories[editIdx]; setCategories(c=>c.map((x,i)=>i===editIdx?t:x)); setProducts(ps=>ps.map(p=>p.category===old?{...p,category:t}:p)); setEditIdx(null); };
-  const deleteCat=(idx)=>{ const n=categories[idx]; if(products.some(p=>p.category===n))return alert(`No puedes eliminar "${n}" porque tiene productos asignados.`); setCategories(c=>c.filter((_,i)=>i!==idx)); };
+const OrderStateProgress = ({order,onAdvance,onCancel}) => {
+  const idx = ORDER_STATES.indexOf(order.state);
+  const isCancelled = order.state==="Cancelled"||order.state==="Cancelado";
+  const isDelivered  = order.state==="Entregado";
+
   return (
-    <>
-      <div style={s.header}>
-        <h1 style={s.pageTitle}>Categorías</h1>
-        <span style={{fontSize:12,color:"#64748b"}}>{categories.length} registradas</span>
-      </div>
-      <div style={{...s.card,padding:"18px 18px",marginBottom:18}}>
-        <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>➕ Nueva categoría</div>
-        <div style={{display:"flex",gap:10}}>
-          <input value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()}
-            placeholder="Ej: Bebidas, Papelería…"
-            style={{flex:1,padding:"10px 13px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:15,color:"#0f172a",outline:"none",background:"#f8fafc"}}/>
-          <button onClick={addCat} style={s.btn()}>Agregar</button>
-        </div>
-      </div>
-      <div style={s.card}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",padding:"8px 16px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-          <span style={s.th}>Categoría</span>
-          <span style={{...s.th,textAlign:"center"}}>Productos</span>
-          <span style={{...s.th,textAlign:"right"}}>Acciones</span>
-        </div>
-        {categories.length===0&&<div style={{padding:"32px",textAlign:"center",color:"#94a3b8"}}>Sin categorías.</div>}
-        {categories.map((cat,idx)=>{
-          const count=products.filter(p=>p.category===cat).length;
+    <div>
+      {/* Barra de progreso */}
+      <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:14}}>
+        {ORDER_STATES.map((st,i)=>{
+          const done = idx>=i;
+          const sc = ORDER_STATE_COLORS[st];
           return (
-            <div key={cat+idx} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",alignItems:"center",padding:"12px 16px",borderBottom:"1px solid #f1f5f9",gap:8}}>
-              {editIdx===idx?(
-                <div style={{display:"flex",gap:6,gridColumn:"1/-1"}}>
-                  <input value={editVal} onChange={e=>setEditVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveEdit();if(e.key==="Escape")setEditIdx(null);}} autoFocus
-                    style={{flex:1,padding:"7px 11px",borderRadius:8,border:"1.5px solid #6366f1",fontSize:14,outline:"none",background:"#f8fafc"}}/>
-                  <button onClick={saveEdit} style={{padding:"7px 12px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:13}}>✓</button>
-                  <button onClick={()=>setEditIdx(null)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#f8fafc",color:"#64748b",cursor:"pointer",fontWeight:600,fontSize:13}}>✕</button>
-                </div>
-              ):(
-                <>
-                  <span style={{background:"#eef2ff",color:"#6366f1",padding:"4px 12px",borderRadius:20,fontSize:13,fontWeight:700,display:"inline-block"}}>{cat}</span>
-                  <span style={{fontSize:12,color:"#64748b",textAlign:"center"}}>{count}</span>
-                  <div style={{display:"flex",gap:2,justifyContent:"flex-end"}}>
-                    <button style={s.iconBtn} onClick={()=>startEdit(idx)}>✏️</button>
-                    <button style={s.iconBtn} onClick={()=>deleteCat(idx)}>🗑️</button>
-                  </div>
-                </>
-              )}
+            <div key={st} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{width:"100%",height:4,background:done?sc.dot:"#e2e8f0",borderRadius:4,transition:"background 0.3s"}}/>
+              <div style={{fontSize:9,fontWeight:600,color:done?sc.text:"#94a3b8",textAlign:"center",lineHeight:1.2}}>{st}</div>
             </div>
           );
         })}
       </div>
-    </>
+
+      {/* Estado actual */}
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{background:ORDER_STATE_COLORS[order.state]?.bg,color:ORDER_STATE_COLORS[order.state]?.text,padding:"6px 14px",borderRadius:20,fontWeight:700,fontSize:13}}>
+          ● {order.state}
+        </div>
+
+        {!isCancelled&&!isDelivered&&(
+          <Btn size="sm" variant="green" onClick={onAdvance}>
+            → {ORDER_STATES[idx+1]||"Entregar"}
+          </Btn>
+        )}
+
+        {!isCancelled&&!isDelivered&&(
+          <Btn size="sm" variant="danger" onClick={onCancel}>🚫 Cancelar pedido</Btn>
+        )}
+      </div>
+    </div>
   );
 };
 
-// ── ReportesTab ───────────────────────────────────────────────────────────────
-const ReportesTab = ({ movements, products, isMobile, s }) => {
-  const [periodo, setPeriodo] = useState("semana");
+const OrderCard = ({order,db,onEdit,onAdvance,onCancel,onPDF}) => {
+  const [expanded,setExpanded]=useState(false);
+  const client = db.clients.find(c=>c.id===Number(order.clientId));
+  const pm     = db.paymentMethods.find(p=>p.id===Number(order.paymentMethodId));
+  const sc     = ORDER_STATE_COLORS[order.state]||ORDER_STATE_COLORS["Pendiente"];
 
-  // ── Helpers de fecha ────────────────────────────────────────────────────────
-  const parseDate = (str) => {
-    // formato "DD/MM/YYYY, HH:MM:SS" o similar según es-CO
-    try {
-      const parts = str.split(", ")[0].split("/");
-      if (parts.length === 3) {
-        const [d, m, y] = parts;
-        return new Date(`${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`);
-      }
-    } catch {}
-    return new Date(str);
-  };
+  return (
+    <div style={{background:"#fff",borderRadius:13,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginBottom:10,overflow:"hidden",border:`1.5px solid ${sc.dot}22`}}>
+      {/* Header */}
+      <div style={{padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",gap:10}} onClick={()=>setExpanded(e=>!e)}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+            <span style={{fontWeight:800,fontSize:14,color:"#0f172a"}}>Pedido #{String(order.id).padStart(4,"0")}</span>
+            <div style={{background:sc.bg,color:sc.text,padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>● {order.state}</div>
+          </div>
+          <div style={{fontSize:12,color:"#64748b"}}>
+            {client?`👤 ${client.name}`:"Sin cliente"}
+            {pm?` · ${pm.icon} ${pm.name}`:""}
+          </div>
+          <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{order.createdAt}</div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontWeight:900,fontSize:16,color:"#0f172a"}}>{formatCOP(order.total)}</div>
+          <div style={{fontSize:10,color:"#94a3b8"}}>{expanded?"▲":"▼"}</div>
+        </div>
+      </div>
 
-  const now = new Date();
-  const startOf = {
-    dia:    new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-    semana: new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()),
-    mes:    new Date(now.getFullYear(), now.getMonth(), 1),
-  };
+      {expanded&&(
+        <div style={{padding:"0 14px 14px",borderTop:"1px solid #f1f5f9"}}>
+          {/* Productos del pedido */}
+          <div style={{margin:"12px 0 10px"}}>
+            {order.items.map((line,i)=>{
+              const prod=db.products.find(p=>p.id===Number(line.productId));
+              if(!prod) return null;
+              return (
+                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f8fafc",fontSize:13}}>
+                  <span style={{color:"#334155"}}>{prod.name} <span style={{color:"#94a3b8",fontSize:11}}>×{line.qty}</span></span>
+                  <span style={{fontWeight:700}}>{formatCOP(prod.price*Number(line.qty))}</span>
+                </div>
+              );
+            })}
+            {order.discount>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:12,color:"#b91c1c"}}><span>Descuento</span><span>-{formatCOP(order.discount)}</span></div>}
+            {order.delivery?.value>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:12,color:"#64748b"}}><span>🛵 Domicilio</span><span>{formatCOP(order.delivery.value)}</span></div>}
+          </div>
 
-  const filteredMov = useMemo(() => {
-    const desde = startOf[periodo];
-    return movements.filter(m => {
-      const d = parseDate(m.date);
-      return d >= desde;
-    });
-  }, [movements, periodo]);
+          {/* Domicilio info */}
+          {order.delivery?.name&&(
+            <div style={{background:"#f8fafc",borderRadius:8,padding:"8px 10px",marginBottom:10,fontSize:12}}>
+              <div style={{fontWeight:700,color:"#0f172a"}}>{order.delivery.name}</div>
+              {order.delivery.address&&<div style={{color:"#64748b"}}>📍 {order.delivery.address}</div>}
+              {order.delivery.phone&&<div style={{color:"#64748b"}}>📞 {order.delivery.phone}</div>}
+            </div>
+          )}
 
-  // Solo salidas para ventas
-  const salidas = filteredMov.filter(m => m.type === "salida");
-  const entradas = filteredMov.filter(m => m.type === "entrada");
-  const ajustes  = filteredMov.filter(m => m.type === "ajuste");
+          {/* Estado + avanzar */}
+          <OrderStateProgress order={order} onAdvance={()=>onAdvance(order.id)} onCancel={()=>onCancel(order.id)}/>
 
-  // Valor total de ventas del periodo
-  const valorVentas = salidas.reduce((s, m) => {
-    const prod = products.find(p => p.id === m.productId);
-    return s + (prod ? prod.price * m.qty : 0);
-  }, 0);
+          {/* Acciones */}
+          <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+            <Btn size="sm" variant="secondary" onClick={()=>onEdit(order)}>✏️ Editar</Btn>
+            {order.state==="Entregado"&&<Btn size="sm" variant="secondary" onClick={()=>onPDF(order)}>📄 Factura PDF</Btn>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
-  const totalUnidadesVendidas = salidas.reduce((s, m) => s + m.qty, 0);
+// ═══════════════════════════════════════════════════════════════
+//  GENERIC CRUD TABLE
+// ═══════════════════════════════════════════════════════════════
+const CRUDTable = ({title,icon,items,columns,renderForm,emptyText,onAdd,onEdit,onDelete,s}) => {
+  const [search,setSearch]=useState("");
+  const [showForm,setShowForm]=useState(false);
+  const [editing,setEditing]=useState(null);
 
-  // ── Top 5 más vendidos (por unidades) ──────────────────────────────────────
-  const topVendidos = useMemo(() => {
-    const mapa = {};
-    salidas.forEach(m => {
-      if (!mapa[m.productId]) mapa[m.productId] = { productId: m.productId, name: m.productName, sku: m.sku, qty: 0, valor: 0 };
-      const prod = products.find(p => p.id === m.productId);
-      mapa[m.productId].qty += m.qty;
-      mapa[m.productId].valor += prod ? prod.price * m.qty : 0;
-    });
-    return Object.values(mapa).sort((a, b) => b.qty - a.qty).slice(0, 5);
-  }, [salidas, products]);
-
-  const maxQty = topVendidos[0]?.qty || 1;
-
-  // ── Top 5 más vendidos HISTÓRICO (todos los movimientos, no solo el periodo) ──
-  const topHistorico = useMemo(() => {
-    const mapa = {};
-    movements.filter(m => m.type === "salida").forEach(m => {
-      if (!mapa[m.productId]) mapa[m.productId] = { productId: m.productId, name: m.productName, sku: m.sku, qty: 0 };
-      mapa[m.productId].qty += m.qty;
-    });
-    return Object.values(mapa).sort((a, b) => b.qty - a.qty).slice(0, 5);
-  }, [movements]);
-
-  // ── Baja rotación: productos con 0 salidas en el periodo ──────────────────
-  const bajaRotacion = useMemo(() => {
-    const vendidosIds = new Set(salidas.map(m => m.productId));
-    return products
-      .filter(p => !vendidosIds.has(p.id))
-      .sort((a, b) => a.stock - b.stock);
-  }, [salidas, products]);
-
-  // ── Movimientos por día (últimos 7 días para gráfico) ─────────────────────
-  const movPorDia = useMemo(() => {
-    const dias = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const label = d.toLocaleDateString("es-CO", { weekday: "short", day: "numeric" });
-      const dayMov = movements.filter(m => {
-        const md = parseDate(m.date);
-        return md.getFullYear() === d.getFullYear() && md.getMonth() === d.getMonth() && md.getDate() === d.getDate();
-      });
-      const ventas  = dayMov.filter(m => m.type === "salida").reduce((s, m) => s + m.qty, 0);
-      const ingresos = dayMov.filter(m => m.type === "entrada").reduce((s, m) => s + m.qty, 0);
-      dias.push({ label, ventas, ingresos });
-    }
-    return dias;
-  }, [movements]);
-
-  const maxBarVal = Math.max(...movPorDia.map(d => Math.max(d.ventas, d.ingresos)), 1);
-
-  const periodos = [
-    { key: "dia",    label: "Hoy"      },
-    { key: "semana", label: "Semana"   },
-    { key: "mes",    label: "Mes"      },
-  ];
-
-  const colores = { salida: "#b91c1c", entrada: "#15803d", ajuste: "#1d4ed8" };
+  const filtered = items.filter(i=>
+    columns.some(c=>String(i[c.key]||"").toLowerCase().includes(search.toLowerCase()))
+  );
 
   return (
     <>
-      {/* Header */}
-      {!isMobile && (
-        <div style={s.header}>
-          <h1 style={s.pageTitle}>Reportes</h1>
-        </div>
-      )}
-
-      {/* Selector de periodo */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        {periodos.map(p => (
-          <button key={p.key} onClick={() => setPeriodo(p.key)} style={{
-            padding: "9px 20px", borderRadius: 9, border: periodo === p.key ? "2px solid #6366f1" : "1.5px solid #e2e8f0",
-            background: periodo === p.key ? "linear-gradient(135deg,#6366f1,#8b5cf6)" : "#fff",
-            color: periodo === p.key ? "#fff" : "#64748b", cursor: "pointer", fontWeight: 700, fontSize: 13,
-            boxShadow: periodo === p.key ? "0 4px 12px rgba(99,102,241,0.3)" : "none"
-          }}>{p.label}</button>
-        ))}
+      <div style={s.header}>
+        <h1 style={s.title}>{icon} {title}</h1>
+        <Btn onClick={()=>{setEditing(null);setShowForm(true);}}>+ Agregar</Btn>
       </div>
-
-      {/* KPIs del periodo */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-        {[
-          { label: "Movimientos",      val: filteredMov.length,          color: "#6366f1", icon: "🔄" },
-          { label: "Salidas",          val: salidas.length,               color: "#b91c1c", icon: "📤" },
-          { label: "Entradas",         val: entradas.length,              color: "#15803d", icon: "📥" },
-          { label: "Unidades vendidas",val: totalUnidadesVendidas,        color: "#f59e0b", icon: "🏷️" },
-        ].map(k => (
-          <div key={k.label} style={s.kpiCard(k.color)}>
-            <div style={{ fontSize: 20, marginBottom: 5 }}>{k.icon}</div>
-            <div style={s.kpiVal}>{k.val}</div>
-            <div style={s.kpiLabel}>{k.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Valor total ventas */}
-      <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", borderRadius: 14, padding: isMobile ? "16px 18px" : "20px 28px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-            💰 VALOR TOTAL EN VENTAS — {periodos.find(p => p.key === periodo)?.label.toUpperCase()}
-          </div>
-          <div style={{ color: "#fff", fontSize: isMobile ? 26 : 34, fontWeight: 900, letterSpacing: -1 }}>
-            {formatCOP(valorVentas)}
-          </div>
-        </div>
-        <div style={{ textAlign: isMobile ? "left" : "right" }}>
-          <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Basado en precio de venta</div>
-          <div style={{ color: "#fff", fontWeight: 700, fontSize: 13 }}>{salidas.length} transacciones</div>
+      <div style={s.toolbar}>
+        <div style={s.searchW}>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:14}}>🔍</span>
+          <input style={s.searchI} placeholder="Buscar…" value={search} onChange={e=>setSearch(e.target.value)}/>
         </div>
       </div>
-
-      {/* Gráfico de barras - últimos 7 días */}
-      <div style={{ ...s.card, padding: "18px 18px 14px", marginBottom: 20 }}>
-        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 16, color: "#0f172a" }}>
-          📅 Actividad — Últimos 7 días
-        </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: isMobile ? 6 : 10, height: 100 }}>
-          {movPorDia.map((d, i) => (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-              <div style={{ width: "100%", display: "flex", gap: 2, alignItems: "flex-end", height: 80 }}>
-                {/* Barra ventas */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-                  <div style={{
-                    background: d.ventas > 0 ? "#fee2e2" : "#f1f5f9",
-                    borderRadius: "4px 4px 0 0",
-                    height: `${(d.ventas / maxBarVal) * 76}px`,
-                    minHeight: d.ventas > 0 ? 4 : 0,
-                    transition: "height 0.4s ease",
-                    position: "relative"
-                  }}>
-                    {d.ventas > 0 && (
-                      <div style={{ position: "absolute", top: -16, left: "50%", transform: "translateX(-50%)", fontSize: 9, fontWeight: 700, color: "#b91c1c", whiteSpace: "nowrap" }}>{d.ventas}</div>
-                    )}
-                  </div>
-                </div>
-                {/* Barra entradas */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-                  <div style={{
-                    background: d.ingresos > 0 ? "#dcfce7" : "#f1f5f9",
-                    borderRadius: "4px 4px 0 0",
-                    height: `${(d.ingresos / maxBarVal) * 76}px`,
-                    minHeight: d.ingresos > 0 ? 4 : 0,
-                    transition: "height 0.4s ease",
-                    position: "relative"
-                  }}>
-                    {d.ingresos > 0 && (
-                      <div style={{ position: "absolute", top: -16, left: "50%", transform: "translateX(-50%)", fontSize: 9, fontWeight: 700, color: "#15803d", whiteSpace: "nowrap" }}>{d.ingresos}</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div style={{ fontSize: isMobile ? 8 : 10, color: "#94a3b8", fontWeight: 500, textAlign: "center" }}>{d.label}</div>
-            </div>
-          ))}
-        </div>
-        {/* Leyenda */}
-        <div style={{ display: "flex", gap: 16, marginTop: 10, justifyContent: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b" }}>
-            <div style={{ width: 10, height: 10, borderRadius: 2, background: "#fee2e2", border: "1px solid #b91c1c" }} />
-            Salidas
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b" }}>
-            <div style={{ width: 10, height: 10, borderRadius: 2, background: "#dcfce7", border: "1px solid #15803d" }} />
-            Entradas
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
-
-        {/* Top 5 más vendidos en el periodo */}
-        <div style={s.card}>
-          <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>🏆 Top 5 más vendidos</span>
-            <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>{periodos.find(p => p.key === periodo)?.label}</span>
-          </div>
-          {topVendidos.length === 0 ? (
-            <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
-              Sin ventas en este periodo
-            </div>
-          ) : (
-            topVendidos.map((item, idx) => (
-              <div key={item.productId} style={{ padding: "12px 18px", borderBottom: "1px solid #f1f5f9" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ background: idx === 0 ? "#fef9c3" : idx === 1 ? "#f1f5f9" : "#f8fafc", color: idx === 0 ? "#a16207" : "#64748b", width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
-                      {idx + 1}
-                    </span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>{item.name}</div>
-                      <div style={{ fontSize: 10, color: "#94a3b8" }}>{item.sku}</div>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: "#b91c1c" }}>{item.qty} und</div>
-                    <div style={{ fontSize: 10, color: "#64748b" }}>{formatCOP(item.valor)}</div>
-                  </div>
-                </div>
-                {/* Barra de progreso */}
-                <div style={{ height: 5, background: "#f1f5f9", borderRadius: 10 }}>
-                  <div style={{ width: `${(item.qty / maxQty) * 100}%`, height: "100%", background: idx === 0 ? "linear-gradient(90deg,#f59e0b,#fbbf24)" : "linear-gradient(90deg,#6366f1,#8b5cf6)", borderRadius: 10, transition: "width 0.5s" }} />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Top 5 histórico */}
-        <div style={s.card}>
-          <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>📊 Top 5 histórico</span>
-            <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>Todos los tiempos</span>
-          </div>
-          {topHistorico.length === 0 ? (
-            <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin ventas registradas</div>
-          ) : (
-            topHistorico.map((item, idx) => {
-              const maxH = topHistorico[0]?.qty || 1;
-              return (
-                <div key={item.productId} style={{ padding: "12px 18px", borderBottom: "1px solid #f1f5f9" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ background: idx === 0 ? "#fef9c3" : "#f1f5f9", color: idx === 0 ? "#a16207" : "#64748b", width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
-                        {idx + 1}
-                      </span>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>{item.name}</div>
-                        <div style={{ fontSize: 10, color: "#94a3b8" }}>{item.sku}</div>
-                      </div>
-                    </div>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: "#6366f1" }}>{item.qty} und</div>
-                  </div>
-                  <div style={{ height: 5, background: "#f1f5f9", borderRadius: 10 }}>
-                    <div style={{ width: `${(item.qty / maxH) * 100}%`, height: "100%", background: "linear-gradient(90deg,#6366f1,#8b5cf6)", borderRadius: 10 }} />
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Productos de baja rotación */}
       <div style={s.card}>
-        <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>🐢 Baja rotación</span>
-          <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>Sin ventas en el periodo · {bajaRotacion.length} productos</span>
-        </div>
-        {bajaRotacion.length === 0 ? (
-          <div style={{ padding: "28px 18px", textAlign: "center", color: "#15803d", fontSize: 13 }}>
-            ✅ Todos los productos tuvieron movimiento en este periodo
-          </div>
-        ) : (
-          <>
-            {/* Cabecera tabla */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr auto auto" : "2fr 1fr 1fr 1fr 1fr", padding: "8px 18px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-              <span style={s.th}>Producto</span>
-              {!isMobile && <span style={s.th}>Categoría</span>}
-              {!isMobile && <span style={s.th}>Precio</span>}
-              <span style={s.th}>Stock</span>
-              <span style={s.th}>Estado</span>
-            </div>
-            {bajaRotacion.map(p => (
-              <div key={p.id} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr auto auto" : "2fr 1fr 1fr 1fr 1fr", padding: "11px 18px", borderBottom: "1px solid #f1f5f9", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</div>
-                  <div style={{ fontSize: 10, color: "#94a3b8" }}>{p.sku}</div>
-                </div>
-                {!isMobile && <span style={{ fontSize: 12, color: "#64748b" }}>{p.category}</span>}
-                {!isMobile && <span style={{ fontSize: 12, fontWeight: 600 }}>{formatCOP(p.price)}</span>}
-                <span style={{ fontSize: 12, fontWeight: 700, color: p.stock === 0 ? "#b91c1c" : "#334155" }}>{p.stock} {p.unit}</span>
-                <span style={{
-                  fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20, whiteSpace: "nowrap",
-                  background: p.stock === 0 ? "#fee2e2" : p.stock <= 5 ? "#fef9c3" : "#f1f5f9",
-                  color: p.stock === 0 ? "#b91c1c" : p.stock <= 5 ? "#a16207" : "#64748b"
-                }}>
-                  {p.stock === 0 ? "Agotado" : p.stock <= 5 ? "Stock bajo" : "Sin mover"}
-                </span>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-
-      {/* Lista de movimientos del periodo */}
-      <div style={{ ...s.card, marginTop: 16 }}>
-        <div style={{ padding: "16px 18px 12px", fontWeight: 800, fontSize: 13, borderBottom: "1px solid #f1f5f9" }}>
-          🔄 Movimientos del periodo ({filteredMov.length})
-        </div>
-        {filteredMov.length === 0 ? (
-          <div style={{ padding: "28px 18px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin movimientos en este periodo</div>
-        ) : (
-          filteredMov.slice(0, 20).map(m => {
-            const prod = products.find(p => p.id === m.productId);
-            return (
-              <div key={m.id} style={{ padding: "11px 18px", borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 18 }}>{m.type === "entrada" ? "📥" : m.type === "salida" ? "📤" : "🔄"}</span>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{m.productName}</div>
-                    <div style={{ fontSize: 10, color: "#94a3b8" }}>{m.date}{m.note ? ` · ${m.note}` : ""}</div>
+        {filtered.length===0?<EmptyState icon="🔍" text={emptyText}/>:(
+          filtered.map((item,idx)=>(
+            <div key={item.id} style={{...s.tRow("1fr"),background:idx%2===0?"#fff":"#fafafa",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                {columns.map(col=>(
+                  <div key={col.key} style={{fontSize:col.primary?14:11,fontWeight:col.primary?700:400,color:col.primary?"#0f172a":"#64748b"}}>
+                    {col.prefix&&`${col.prefix} `}{item[col.key]||"—"}
                   </div>
-                </div>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontWeight: 800, fontSize: 14, color: colores[m.type] }}>
-                    {m.type === "entrada" ? "+" : m.type === "salida" ? "-" : "="}{m.qty}
-                  </span>
-                  {prod && m.type === "salida" && (
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{formatCOP(prod.price * m.qty)}</span>
-                  )}
-                </div>
+                ))}
               </div>
-            );
-          })
-        )}
-        {filteredMov.length > 20 && (
-          <div style={{ padding: "12px 18px", textAlign: "center", fontSize: 12, color: "#94a3b8" }}>
-            Mostrando 20 de {filteredMov.length} movimientos
-          </div>
+              <div style={{display:"flex",gap:4,flexShrink:0}}>
+                <button style={s.iconBtn} onClick={()=>{setEditing(item);setShowForm(true);}}>✏️</button>
+                <button style={s.iconBtn} onClick={()=>{ if(confirm(`¿Eliminar "${item.name||item.id}"?`)) onDelete(item.id); }}>🗑️</button>
+              </div>
+            </div>
+          ))
         )}
       </div>
+      {showForm&&(
+        <Modal title={editing?`Editar ${title.slice(0,-1)}`:`Nuevo ${title.slice(0,-1)}`} onClose={()=>{setShowForm(false);setEditing(null);}}>
+          {renderForm({
+            initial:editing,
+            onSave:(data)=>{ if(editing) onEdit(data); else onAdd(data); setShowForm(false); setEditing(null); },
+            onClose:()=>{setShowForm(false);setEditing(null);}
+          })}
+        </Modal>
+      )}
     </>
   );
 };
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+//  APP
+// ═══════════════════════════════════════════════════════════════
 export default function App() {
   const isMobile = useIsMobile();
+  useEffect(()=>lockViewport(),[]);
 
-  useEffect(() => { lockViewport(); }, []);
+  const [db, setDB] = useState(()=>loadDB());
+  const [tab, setTab] = useState("Dashboard");
+  const [sideOpen, setSideOpen] = useState(false);
 
-  const [products,   setProducts]   = useState(initialProducts);
-  const [movements,  setMovements]  = useState([]);
-  const [deliveries, setDeliveries] = useState([]);
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
-  const [tab,        setTab]        = useState("Dashboard");
-  const [search,     setSearch]     = useState("");
-  const [catFilter,  setCatFilter]  = useState("Todos");
-  const [showAdd,    setShowAdd]    = useState(false);
-  const [editProd,   setEditProd]   = useState(null);
-  const [preProduct, setPreProduct] = useState(null);
-  const [showMov,    setShowMov]    = useState(false);
-  const [deleteId,   setDeleteId]   = useState(null);
+  // Modals
+  const [showOrderForm,  setShowOrderForm]  = useState(false);
+  const [editingOrder,   setEditingOrder]   = useState(null);
+  const [showMovForm,    setShowMovForm]    = useState(false);
+  const [movPreProduct,  setMovPreProduct]  = useState(null);
 
-  const totalProducts  = products.length;
-  const totalStock     = products.reduce((s,p)=>s+p.stock,0);
-  const inventoryValue = products.reduce((s,p)=>s+p.price*p.stock,0);
-  const lowStock       = products.filter(p=>p.stock<=LOW_STOCK_THRESHOLD);
-  const outOfStock     = products.filter(p=>p.stock===0);
+  const s = makeStyles(isMobile);
 
-  const filtered = useMemo(()=>
-    products.filter(p=>(catFilter==="Todos"||p.category===catFilter)&&(p.name.toLowerCase().includes(search.toLowerCase())||p.sku.toLowerCase().includes(search.toLowerCase())))
-  ,[products,search,catFilter]);
+  // ── DB helpers ──────────────────────────────────────────────
+  const dbOp = useCallback((fn) => setDB(db=>{ const d=fn(db); saveDB(d); return d; }),[]);
 
-  const addProduct    = (d)=>{setProducts(ps=>[...ps,{...d,id:nextId++}]);setShowAdd(false);};
-  const updateProduct = (d)=>{setProducts(ps=>ps.map(p=>p.id===editProd.id?{...p,...d}:p));setEditProd(null);};
-  const deleteProduct = (id)=>{setProducts(ps=>ps.filter(p=>p.id!==id));setDeleteId(null);};
+  // Products
+  const addProduct    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"product"); return {...d2,products:[...d2.products,{...d,id}]}; });
+  const editProduct   = d => dbOp(db=>({...db,products:db.products.map(p=>p.id===d.id?d:p)}));
+  const deleteProduct = id=> dbOp(db=>({...db,products:db.products.filter(p=>p.id!==id)}));
 
+  // Categories
+  const addCat    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"category"); return {...d2,categories:[...d2.categories,{...d,id}]}; });
+  const editCat   = d => dbOp(db=>({...db,categories:db.categories.map(c=>c.id===d.id?d:c)}));
+  const deleteCat = id=> dbOp(db=>({...db,categories:db.categories.filter(c=>c.id!==id)}));
+
+  // Clients
+  const addClient    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"client"); return {...d2,clients:[...d2.clients,{...d,id}]}; });
+  const editClient   = d => dbOp(db=>({...db,clients:db.clients.map(c=>c.id===d.id?d:c)}));
+  const deleteClient = id=> dbOp(db=>({...db,clients:db.clients.filter(c=>c.id!==id)}));
+
+  // Providers
+  const addProvider    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"provider"); return {...d2,providers:[...d2.providers,{...d,id}]}; });
+  const editProvider   = d => dbOp(db=>({...db,providers:db.providers.map(p=>p.id===d.id?d:p)}));
+  const deleteProvider = id=> dbOp(db=>({...db,providers:db.providers.filter(p=>p.id!==id)}));
+
+  // PaymentMethods
+  const addPM    = d => dbOp(db=>{ const {id,db:d2}=nextSeq(db,"paymentMethod"); return {...d2,paymentMethods:[...d2.paymentMethods,{...d,id}]}; });
+  const editPM   = d => dbOp(db=>({...db,paymentMethods:db.paymentMethods.map(p=>p.id===d.id?d:p)}));
+  const deletePM = id=> dbOp(db=>({...db,paymentMethods:db.paymentMethods.filter(p=>p.id!==id)}));
+
+  // Orders
+  const advanceOrder = (id) => dbOp(db=>{
+    return {...db,orders:db.orders.map(o=>{
+      if(o.id!==id) return o;
+      const idx=ORDER_STATES.indexOf(o.state);
+      const next=ORDER_STATES[idx+1]||o.state;
+      return {...o,state:next,updatedAt:nowStr()};
+    })};
+  });
+  const cancelOrder = (id) => dbOp(db=>({...db,orders:db.orders.map(o=>o.id===id?{...o,state:"Cancelado",updatedAt:nowStr()}:o)}));
+
+  // Movements
   const registerMovement = (resolvedLines,type,note,discount,delivery) => {
-    const date=new Date().toLocaleString("es-CO");
-    resolvedLines.forEach(({product,qty})=>{
-      const sa=type==="entrada"?product.stock+qty:type==="salida"?product.stock-qty:qty;
-      setProducts(ps=>ps.map(p=>p.id===product.id?{...p,stock:sa}:p));
-      setMovements(ms=>[{id:Date.now()+Math.random(),productId:product.id,productName:product.name,sku:product.sku,type,qty,note,stockAfter:sa,discount:Number(discount)||0,date},...ms]);
+    const date=nowStr();
+    dbOp(db=>{
+      let d={...db};
+      resolvedLines.forEach(({product,qty})=>{
+        const sa=type==="entrada"?product.stock+qty:type==="salida"?product.stock-qty:qty;
+        d={...d,products:d.products.map(p=>p.id===product.id?{...p,stock:sa}:p)};
+        const {id,db:d2}=nextSeq(d,"movement");
+        d={...d2,movements:[{id,productId:product.id,productName:product.name,sku:product.sku,type,qty,note,stockAfter:sa,discount:Number(discount)||0,date},...d2.movements]};
+      });
+      if(delivery?.name){
+        const sub=resolvedLines.reduce((s,r)=>s+r.product.price*r.qty,0);
+        const {id,db:d2}=nextSeq(d,"delivery");
+        d={...d2,deliveries:[{id,date,name:delivery.name,address:delivery.address,phone:delivery.phone,value:Number(delivery.value)||0,orderValue:sub,discount:Number(discount)||0,products:resolvedLines.map(r=>`${r.product.name} x${r.qty}`)},...d2.deliveries]};
+      }
+      return d;
     });
-    if(delivery?.name){
-      const sub=resolvedLines.reduce((s,r)=>s+r.product.price*r.qty,0);
-      setDeliveries(ds=>[{id:deliveryId++,date,name:delivery.name,address:delivery.address,phone:delivery.phone,value:Number(delivery.value)||0,orderValue:sub,discount:Number(discount)||0,products:resolvedLines.map(r=>`${r.product.name} x${r.qty}`)},...ds]);
+  };
+
+  // Settings
+  const saveSettings = (settings) => dbOp(db=>({...db,settings}));
+
+  // ── KPIs ────────────────────────────────────────────────────
+  const lowStock    = db.products.filter(p=>p.stock<=(db.settings.lowStockThreshold||5));
+  const totalValue  = db.products.reduce((s,p)=>s+p.price*p.stock,0);
+  const pendOrders  = db.orders.filter(o=>o.state==="Pendiente");
+  const todaySales  = db.movements.filter(m=>m.type==="salida"&&m.date?.startsWith(new Date().toLocaleDateString("es-CO")));
+
+  // ── Movement modal state ─────────────────────────────────────
+  const [movLines,    setMovLines]    = useState([{productId:"",qty:""}]);
+  const [movType,     setMovType]     = useState("salida");
+  const [movNote,     setMovNote]     = useState("");
+  const [movDiscount, setMovDiscount] = useState("");
+  const [movDelivery, setMovDelivery] = useState({name:"",address:"",phone:"",value:""});
+  const [movGen,      setMovGen]      = useState(false);
+
+  const openMovModal = (product=null) => {
+    setMovLines(product?[{productId:product.id,qty:""}]:[{productId:"",qty:""}]);
+    setMovType("salida"); setMovNote(""); setMovDiscount(""); setMovDelivery({name:"",address:"",phone:"",value:""});
+    setMovPreProduct(product); setShowMovForm(true);
+  };
+
+  const resolvedMovLines = movLines.map(r=>({product:db.products.find(p=>p.id===Number(r.productId)),qty:Number(r.qty)})).filter(r=>r.product&&r.qty>0);
+  const movSubtotal = resolvedMovLines.reduce((s,r)=>s+r.product.price*r.qty,0);
+  const movTotal = movSubtotal-(Number(movDiscount)||0)+(Number(movDelivery.value)||0);
+
+  const handleMovSave = async ()=>{
+    if(resolvedMovLines.length===0) return alert("Agrega al menos un producto.");
+    for(const {product,qty} of resolvedMovLines) if(movType==="salida"&&qty>product.stock) return alert(`Stock insuficiente: ${product.name}`);
+    registerMovement(resolvedMovLines,movType,movNote,movDiscount,movDelivery);
+    if(movType==="salida"){
+      const {id}=nextSeq(db,"movement");
+      setMovGen(true);
+      try{ await generateInvoicePDF(resolvedMovLines,{note:movNote,discount:Number(movDiscount)||0,deliveryVal:Number(movDelivery.value)||0,clientName:movDelivery.name,paymentMethod:""},String(id).padStart(5,"0")); }catch(e){console.error(e);}
+      setMovGen(false);
     }
-    setPreProduct(null); setShowMov(false);
+    setShowMovForm(false);
   };
 
-  const stockColor=(s)=>s===0?"red":s<=LOW_STOCK_THRESHOLD?"yellow":"green";
-
-  // ── Estilos ─────────────────────────────────────────────────────────────────
-  const SIDEBAR_W = 200;
-  const s = {
-    app:      {minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Segoe UI',sans-serif",color:"#0f172a"},
-    sidebar:  {width:SIDEBAR_W,background:"#0f172a",minHeight:"100vh",padding:"24px 0",position:"fixed",top:0,left:0,display:"flex",flexDirection:"column",zIndex:100},
-    logoText: {fontSize:18,fontWeight:900,color:"#fff",letterSpacing:-0.5},
-    logoSub:  {fontSize:10,color:"#64748b",fontWeight:500,marginTop:2},
-    nav:      {padding:"14px 10px",flex:1},
-    navItem:  (a)=>({display:"flex",alignItems:"center",gap:9,padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:3,background:a?"linear-gradient(135deg,#6366f1,#8b5cf6)":"transparent",color:a?"#fff":"#94a3b8",fontWeight:a?700:500,fontSize:13,border:"none",width:"100%",textAlign:"left"}),
-    // Mobile bottom nav
-    bottomNav:{position:"fixed",bottom:0,left:0,right:0,background:"#0f172a",zIndex:100,display:"flex",borderTop:"1px solid #1e293b",paddingBottom:"env(safe-area-inset-bottom,0px)"},
-    bottomItem:(a)=>({flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 4px 6px",border:"none",background:"transparent",cursor:"pointer",color:a?"#818cf8":"#64748b",fontSize:9,fontWeight:a?700:500,gap:2,minWidth:0}),
-    main:     isMobile?{padding:"14px 12px 80px",minHeight:"100vh"}:{marginLeft:SIDEBAR_W,padding:"28px 30px",minHeight:"100vh"},
-    header:   {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10},
-    pageTitle:{fontSize:isMobile?20:24,fontWeight:900,color:"#0f172a",margin:0},
-    kpiGrid:  {display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(4,1fr)",gap:12,marginBottom:20},
-    kpiCard:  (c)=>({background:"#fff",borderRadius:14,padding:isMobile?"14px 16px":"18px 20px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",borderLeft:`4px solid ${c}`}),
-    kpiVal:   {fontSize:isMobile?20:26,fontWeight:900,color:"#0f172a",lineHeight:1.1,marginBottom:3},
-    kpiLabel: {fontSize:isMobile?10:12,color:"#64748b",fontWeight:500},
-    card:     {background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,0.06)",overflow:"hidden"},
-    tRow:     {display:"grid",alignItems:"center",padding:isMobile?"11px 14px":"12px 18px",borderBottom:"1px solid #f1f5f9"},
-    th:       {fontSize:10,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:0.6},
-    btn:      (v="primary")=>({padding:"10px 18px",borderRadius:9,border:"none",cursor:"pointer",fontWeight:700,fontSize:14,background:v==="primary"?"linear-gradient(135deg,#6366f1,#8b5cf6)":v==="danger"?"#fee2e2":"#f1f5f9",color:v==="primary"?"#fff":v==="danger"?"#b91c1c":"#334155",boxShadow:v==="primary"?"0 4px 14px rgba(99,102,241,0.25)":"none"}),
-    iconBtn:  {background:"none",border:"none",cursor:"pointer",padding:"6px 7px",borderRadius:8,fontSize:16},
-    toolbar:  {display:"flex",gap:8,alignItems:"center",marginBottom:16,flexWrap:"wrap"},
-    searchInp:{flex:1,minWidth:160,padding:"9px 14px 9px 36px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:14,outline:"none",background:"#f8fafc",color:"#0f172a"},
+  const handleOrderPDF = async (order)=>{
+    const items=order.items.map(l=>({product:db.products.find(p=>p.id===Number(l.productId)),qty:Number(l.qty)})).filter(r=>r.product);
+    const client=db.clients.find(c=>c.id===Number(order.clientId));
+    const pm=db.paymentMethods.find(p=>p.id===Number(order.paymentMethodId));
+    await generateInvoicePDF(items,{note:order.note,discount:order.discount,deliveryVal:order.delivery?.value||0,clientName:client?.name||"",paymentMethod:pm?`${pm.icon} ${pm.name}`:""}, String(order.id).padStart(5,"0"));
   };
 
-  const navIcon=(t)=>({Dashboard:"📊",Inventario:"📦",Movimientos:"🔄",Domicilios:"🛵",Alertas:"🔔","Categorías":"🏷️","Reportes":"📈"}[t]);
-
-  // Tarjeta compacta para móvil en Inventario
-  const MobileProductCard = ({p}) => (
-    <div style={{background:"#fff",borderRadius:12,padding:"14px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:700,fontSize:14,color:"#0f172a",marginBottom:2}}>{p.name}</div>
-          <div style={{fontSize:11,color:"#6366f1",fontWeight:600,fontFamily:"monospace"}}>{p.sku}</div>
-        </div>
-        <Badge color={stockColor(p.stock)}>{p.stock} {p.unit}</Badge>
-      </div>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-        <Badge color="blue">{p.category}</Badge>
-        <span style={{fontSize:12,color:"#334155",fontWeight:600}}>{formatCOP(p.price)}</span>
-      </div>
-      <div style={{display:"flex",gap:6}}>
-        <button onClick={()=>{setPreProduct(p);setShowMov(true);}} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid #c7d2fe",background:"#eef2ff",color:"#6366f1",cursor:"pointer",fontWeight:700,fontSize:12}}>🔄 Movimiento</button>
-        <button onClick={()=>setEditProd(p)} style={{padding:"8px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#f8fafc",color:"#334155",cursor:"pointer",fontSize:14}}>✏️</button>
-        <button onClick={()=>setDeleteId(p.id)} style={{padding:"8px 12px",borderRadius:8,border:"1.5px solid #fee2e2",background:"#fff5f5",color:"#b91c1c",cursor:"pointer",fontSize:14}}>🗑️</button>
-      </div>
-    </div>
-  );
-
-  // Tarjeta compacta para móvil en Movimientos
-  const MobileMovCard = ({m}) => {
-    const prod=products.find(p=>p.id===m.productId);
-    return (
-      <div style={{background:"#fff",borderRadius:12,padding:"12px 14px",marginBottom:8,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-          <span style={{fontWeight:700,fontSize:13,color:"#0f172a"}}>{m.productName}</span>
-          <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>
-            {m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"} {m.type}
-          </Badge>
-        </div>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:"#64748b"}}>
-          <span>Cant: <strong style={{color:m.type==="entrada"?"#15803d":m.type==="salida"?"#b91c1c":"#1d4ed8"}}>{m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}</strong></span>
-          {prod&&<span>Total: <strong style={{color:"#0f172a"}}>{formatCOP(prod.price*m.qty)}</strong></span>}
-          {m.note&&<span>{m.note}</span>}
-        </div>
-        <div style={{fontSize:10,color:"#94a3b8",marginTop:4}}>{m.date}</div>
-      </div>
-    );
-  };
-
-  // Tarjeta domicilio móvil
-  const MobileDeliveryCard = ({d}) => (
-    <div style={{background:"#fff",borderRadius:12,padding:"12px 14px",marginBottom:8,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
-        <div>
-          <div style={{fontWeight:700,fontSize:14}}>{d.name}</div>
-          {d.phone&&<div style={{fontSize:11,color:"#64748b"}}>{d.phone}</div>}
-          {d.address&&<div style={{fontSize:11,color:"#64748b"}}>📍 {d.address}</div>}
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{fontWeight:700,fontSize:14,color:"#6366f1"}}>{formatCOP(d.value)}</div>
-          <div style={{fontSize:10,color:"#94a3b8"}}>domicilio</div>
-        </div>
-      </div>
-      <div style={{display:"flex",gap:10,fontSize:12,color:"#64748b",flexWrap:"wrap"}}>
-        <span>Pedido: <strong style={{color:"#0f172a"}}>{formatCOP(d.orderValue)}</strong></span>
-        {d.discount>0&&<span>Desc: <strong style={{color:"#b91c1c"}}>-{formatCOP(d.discount)}</strong></span>}
-      </div>
-      <div style={{fontSize:10,color:"#94a3b8",marginTop:4}}>{d.date}</div>
-    </div>
-  );
-
+  // ═══════════════════════════════════════════════════════════
+  //  RENDER
+  // ═══════════════════════════════════════════════════════════
   return (
-    <div style={s.app}>
-      {/* ── SIDEBAR (solo desktop) ── */}
-      {!isMobile&&(
-        <aside style={s.sidebar}>
-          <div style={{padding:"0 20px 22px",borderBottom:"1px solid #1e293b"}}>
-            <div style={s.logoText}>📦 InvenPro</div>
-            <div style={s.logoSub}>Control de inventario</div>
-          </div>
-          <nav style={s.nav}>
-            {TABS.map(t=>(
-              <button key={t} onClick={()=>setTab(t)} style={s.navItem(tab===t)}>
-                {navIcon(t)}{" "}{t}
-                {t==="Alertas"&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 6px",fontSize:10,fontWeight:800}}>{lowStock.length}</span>}
-              </button>
-            ))}
-          </nav>
-          <div style={{padding:"0 14px 16px",fontSize:10,color:"#334155",textAlign:"center"}}>{products.length} productos</div>
-        </aside>
-      )}
+    <div style={{minHeight:"100vh",background:"#f1f5f9",fontFamily:"'Segoe UI',sans-serif",color:"#0f172a"}}>
 
-      {/* ── MAIN ── */}
+      <Sidebar tab={tab} setTab={setTab} db={db} sideOpen={sideOpen} setSideOpen={setSideOpen} isMobile={isMobile}/>
+
       <main style={s.main}>
 
-        {/* Header móvil */}
+        {/* Mobile top bar */}
         {isMobile&&(
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div>
-              <div style={{fontSize:16,fontWeight:900,color:"#0f172a"}}>📦 InvenPro</div>
-              <div style={{fontSize:10,color:"#64748b"}}>{tab}</div>
-            </div>
-            {(tab==="Dashboard"||tab==="Movimientos")&&(
-              <button style={s.btn()} onClick={()=>setShowMov(true)}>🔄 Movimiento</button>
-            )}
-            {tab==="Inventario"&&(
-              <button style={s.btn()} onClick={()=>setShowAdd(true)}>+ Agregar</button>
-            )}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <button onClick={()=>setSideOpen(true)} style={{background:"#0f172a",border:"none",borderRadius:9,width:36,height:36,cursor:"pointer",color:"#fff",fontSize:18}}>☰</button>
+            <div style={{fontWeight:800,fontSize:15,color:"#0f172a"}}>{tab}</div>
+            <div style={{width:36}}/>
           </div>
         )}
 
         {/* ─── DASHBOARD ─── */}
         {tab==="Dashboard"&&(
           <>
-            {!isMobile&&(
-              <div style={s.header}>
-                <h1 style={s.pageTitle}>Dashboard</h1>
-                <button style={s.btn()} onClick={()=>setShowMov(true)}>🔄 Registrar movimiento</button>
-              </div>
-            )}
-            <div style={s.kpiGrid}>
+            {!isMobile&&<div style={s.header}><h1 style={s.title}>📊 Dashboard</h1><Btn onClick={()=>openMovModal()}>🔄 Registrar movimiento</Btn></div>}
+            {isMobile&&<div style={{marginBottom:14,display:"flex",gap:8}}><Btn style={{flex:1}} onClick={()=>openMovModal()}>🔄 Movimiento</Btn><Btn style={{flex:1}} onClick={()=>{setEditingOrder(null);setShowOrderForm(true);}}>🛒 Pedido</Btn></div>}
+            <div style={s.kpiGrid(4)}>
               {[
-                {label:"Productos",val:totalProducts,color:"#6366f1",icon:"📦"},
-                {label:"En stock",val:totalStock,color:"#10b981",icon:"🏷️"},
-                {label:"Valor inventario",val:formatCOP(inventoryValue),color:"#f59e0b",icon:"💰"},
+                {label:"Productos",val:db.products.length,color:"#6366f1",icon:"📦"},
+                {label:"Pedidos pendientes",val:pendOrders.length,color:"#f59e0b",icon:"🛒"},
+                {label:"Valor inventario",val:formatCOP(totalValue),color:"#10b981",icon:"💰"},
                 {label:"Stock bajo",val:lowStock.length,color:"#ef4444",icon:"🔔"},
-              ].map(k=>(
-                <div key={k.label} style={s.kpiCard(k.color)}>
-                  <div style={{fontSize:20,marginBottom:6}}>{k.icon}</div>
-                  <div style={s.kpiVal}>{k.val}</div>
-                  <div style={s.kpiLabel}>{k.label}</div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14,marginBottom:16}}>
-              <div style={s.card}>
-                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13}}>Productos por categoría</div>
-                <div style={{padding:"0 16px 14px"}}>
-                  {categories.map(cat=>{
-                    const count=products.filter(p=>p.category===cat).length;
-                    const pct=totalProducts?(count/totalProducts)*100:0;
-                    return (
-                      <div key={cat} style={{marginBottom:11}}>
-                        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
-                          <span style={{fontWeight:600}}>{cat}</span>
-                          <span style={{color:"#64748b"}}>{count}</span>
-                        </div>
-                        <div style={{height:6,background:"#f1f5f9",borderRadius:10}}>
-                          <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#6366f1,#8b5cf6)",borderRadius:10}}/>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div style={s.card}>
-                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>Stock bajo</span>
-                  {lowStock.length>0&&<Badge color="red">{lowStock.length}</Badge>}
-                </div>
-                {lowStock.length===0
-                  ?<div style={{padding:"14px 16px",color:"#64748b",fontSize:12}}>✅ Todo OK</div>
-                  :lowStock.map(p=>(
-                    <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontWeight:600,fontSize:12}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
-                      <Badge color={p.stock===0?"red":"yellow"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
-                    </div>
-                  ))
-                }
-              </div>
-            </div>
-
-            {/* Movimientos recientes */}
-            <div style={s.card}>
-              <div style={{padding:"14px 16px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #f1f5f9"}}>
-                <span style={{fontWeight:800,fontSize:13}}>Movimientos recientes</span>
-                {movements.length>0&&<button onClick={()=>setTab("Movimientos")} style={{fontSize:11,color:"#6366f1",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>Ver todos →</button>}
-              </div>
-              {movements.length===0
-                ?<div style={{padding:"28px 16px",textAlign:"center",color:"#94a3b8",fontSize:12}}><div style={{fontSize:28,marginBottom:6}}>📋</div>Sin movimientos aún.</div>
-                :isMobile
-                  ?<div style={{padding:"10px 12px"}}>{movements.slice(0,5).map(m=><MobileMovCard key={m.id} m={m}/>)}</div>
-                  :(
-                    <>
-                      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 0.7fr 1.2fr 1.8fr 1.2fr",padding:"8px 18px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-                        {["Producto","SKU","Tipo","Cant.","Valor","Nota","Fecha"].map(h=><span key={h} style={s.th}>{h}</span>)}
-                      </div>
-                      {movements.slice(0,8).map(m=>{
-                        const prod=products.find(p=>p.id===m.productId);
-                        return (
-                          <div key={m.id} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 0.7fr 1.2fr 1.8fr 1.2fr",padding:"11px 18px",borderBottom:"1px solid #f1f5f9",alignItems:"center"}}>
-                            <span style={{fontWeight:600,fontSize:12}}>{m.productName}</span>
-                            <span style={{fontFamily:"monospace",fontSize:11,color:"#6366f1",fontWeight:700}}>{m.sku}</span>
-                            <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"} {m.type}</Badge>
-                            <span style={{fontWeight:800,fontSize:13,color:m.type==="entrada"?"#15803d":m.type==="salida"?"#b91c1c":"#1d4ed8"}}>{m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}</span>
-                            <span style={{fontSize:12,fontWeight:700}}>{prod?formatCOP(prod.price*m.qty):"—"}</span>
-                            <span style={{fontSize:11,color:"#64748b"}}>{m.note||"—"}</span>
-                            <span style={{fontSize:10,color:"#94a3b8"}}>{m.date}</span>
-                          </div>
-                        );
-                      })}
-                    </>
-                  )
-              }
-            </div>
-          </>
-        )}
-
-        {/* ─── INVENTARIO ─── */}
-        {tab==="Inventario"&&(
-          <>
-            {!isMobile&&(
-              <div style={s.header}>
-                <h1 style={s.pageTitle}>Inventario</h1>
-                <button style={s.btn()} onClick={()=>setShowAdd(true)}>+ Agregar producto</button>
-              </div>
-            )}
-            <div style={s.toolbar}>
-              <div style={{position:"relative",flex:1,minWidth:140}}>
-                <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:14}}>🔍</span>
-                <input style={s.searchInp} placeholder="Buscar…" value={search} onChange={e=>setSearch(e.target.value)}/>
-              </div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                {["Todos",...categories].map(c=>(
-                  <button key={c} onClick={()=>setCatFilter(c)} style={{padding:"7px 12px",borderRadius:8,border:catFilter===c?"2px solid #6366f1":"1.5px solid #e2e8f0",background:catFilter===c?"#eef2ff":"#fff",color:catFilter===c?"#6366f1":"#64748b",cursor:"pointer",fontSize:12,fontWeight:catFilter===c?700:500}}>
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Móvil: tarjetas */}
-            {isMobile?(
-              <div>
-                {filtered.length===0?<div style={{padding:"32px",textAlign:"center",color:"#94a3b8"}}>Sin productos</div>:filtered.map(p=><MobileProductCard key={p.id} p={p}/>)}
-              </div>
-            ):(
-              <div style={s.card}>
-                <div style={{...s.tRow,gridTemplateColumns:"2fr 1.1fr 1.1fr 1fr 1fr 1fr 1.4fr",borderBottom:"1px solid #e2e8f0",background:"#f8fafc"}}>
-                  {["Producto","SKU","Categoría","Precio","Costo","Stock","Acciones"].map(h=><span key={h} style={s.th}>{h}</span>)}
-                </div>
-                {filtered.length===0?<div style={{padding:"32px",textAlign:"center",color:"#94a3b8"}}>Sin productos</div>:filtered.map(p=>(
-                  <div key={p.id} style={{...s.tRow,gridTemplateColumns:"2fr 1.1fr 1.1fr 1fr 1fr 1fr 1.4fr"}}>
-                    <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.description}</div></div>
-                    <span style={{fontFamily:"monospace",fontWeight:600,color:"#6366f1",fontSize:11}}>{p.sku}</span>
-                    <Badge color="blue">{p.category}</Badge>
-                    <span style={{fontSize:12}}>{formatCOP(p.price)}</span>
-                    <span style={{fontSize:12,color:"#64748b"}}>{p.cost?formatCOP(p.cost):"—"}</span>
-                    <Badge color={stockColor(p.stock)}>{p.stock} {p.unit}</Badge>
-                    <div style={{display:"flex",gap:2}}>
-                      <button title="Movimiento" style={s.iconBtn} onClick={()=>{setPreProduct(p);setShowMov(true);}}>🔄</button>
-                      <button title="Editar" style={s.iconBtn} onClick={()=>setEditProd(p)}>✏️</button>
-                      <button title="Eliminar" style={s.iconBtn} onClick={()=>setDeleteId(p.id)}>🗑️</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{marginTop:8,fontSize:11,color:"#94a3b8"}}>{filtered.length} de {products.length} productos</div>
-          </>
-        )}
-
-        {/* ─── MOVIMIENTOS ─── */}
-        {tab==="Movimientos"&&(
-          <>
-            {!isMobile&&(
-              <div style={s.header}>
-                <h1 style={s.pageTitle}>Movimientos</h1>
-                <button style={s.btn()} onClick={()=>setShowMov(true)}>🔄 Registrar movimiento</button>
-              </div>
-            )}
-            {movements.length===0
-              ?<div style={{...s.card,padding:"48px",textAlign:"center",color:"#94a3b8"}}><div style={{fontSize:32,marginBottom:8}}>📋</div>Sin movimientos.</div>
-              :isMobile
-                ?<div>{movements.map(m=><MobileMovCard key={m.id} m={m}/>)}</div>
-                :(
-                  <div style={s.card}>
-                    <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr 1fr 0.7fr 1fr 1.4fr 1fr",padding:"8px 18px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-                      {["Producto","SKU","Tipo","Cant.","Valor","Nota","Fecha"].map(h=><span key={h} style={s.th}>{h}</span>)}
-                    </div>
-                    {movements.map(m=>{
-                      const prod=products.find(p=>p.id===m.productId);
-                      return (
-                        <div key={m.id} style={{display:"grid",gridTemplateColumns:"1.4fr 1fr 1fr 0.7fr 1fr 1.4fr 1fr",padding:"11px 18px",borderBottom:"1px solid #f1f5f9",alignItems:"center"}}>
-                          <span style={{fontWeight:600,fontSize:12}}>{m.productName}</span>
-                          <span style={{fontFamily:"monospace",fontSize:11,color:"#6366f1",fontWeight:600}}>{m.sku}</span>
-                          <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>{m.type==="entrada"?"📥 Entrada":m.type==="salida"?"📤 Salida":"🔄 Ajuste"}</Badge>
-                          <span style={{fontWeight:700,fontSize:13}}>{m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}</span>
-                          <span style={{fontWeight:700,fontSize:12}}>{prod?formatCOP(prod.price*m.qty):"—"}</span>
-                          <span style={{fontSize:11,color:"#64748b"}}>{m.note||"—"}</span>
-                          <span style={{fontSize:10,color:"#94a3b8"}}>{m.date}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-            }
-          </>
-        )}
-
-        {/* ─── DOMICILIOS ─── */}
-        {tab==="Domicilios"&&(
-          <>
-            {!isMobile&&<div style={s.header}><h1 style={s.pageTitle}>Domicilios</h1></div>}
-            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr 1fr":"repeat(3,1fr)",gap:12,marginBottom:16}}>
-              {[
-                {label:"Total domicilios",val:deliveries.length,color:"#6366f1",icon:"🛵"},
-                {label:"Valor domicilios",val:formatCOP(deliveries.reduce((s,d)=>s+d.value,0)),color:"#10b981",icon:"💵"},
-                {label:"Valor pedidos",val:formatCOP(deliveries.reduce((s,d)=>s+d.orderValue,0)),color:"#f59e0b",icon:"🛒"},
               ].map(k=>(
                 <div key={k.label} style={s.kpiCard(k.color)}>
                   <div style={{fontSize:18,marginBottom:5}}>{k.icon}</div>
@@ -1195,28 +748,201 @@ export default function App() {
                 </div>
               ))}
             </div>
-            {deliveries.length===0
-              ?<div style={{...s.card,padding:"44px",textAlign:"center",color:"#94a3b8"}}><div style={{fontSize:32,marginBottom:8}}>🛵</div>Sin domicilios.<br/><span style={{fontSize:11}}>Llena el campo Domicilio al registrar un movimiento.</span></div>
-              :isMobile
-                ?<div>{deliveries.map(d=><MobileDeliveryCard key={d.id} d={d}/>)}</div>
-                :(
-                  <div style={s.card}>
-                    <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.9fr 1fr 1fr 1fr 1.4fr 0.9fr",padding:"8px 18px",background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-                      {["Cliente","Teléfono","V.Pedido","V.Domicilio","Descuento","Productos","Fecha"].map(h=><span key={h} style={s.th}>{h}</span>)}
-                    </div>
-                    {deliveries.map(d=>(
-                      <div key={d.id} style={{display:"grid",gridTemplateColumns:"1.4fr 0.9fr 1fr 1fr 1fr 1.4fr 0.9fr",padding:"11px 18px",borderBottom:"1px solid #f1f5f9",alignItems:"start"}}>
-                        <div><div style={{fontWeight:700,fontSize:12}}>{d.name}</div>{d.address&&<div style={{fontSize:10,color:"#64748b"}}>📍 {d.address}</div>}</div>
-                        <span style={{fontSize:11,color:"#475569"}}>{d.phone||"—"}</span>
-                        <span style={{fontWeight:700,fontSize:11}}>{formatCOP(d.orderValue)}</span>
-                        <span style={{fontWeight:700,fontSize:11,color:"#6366f1"}}>{formatCOP(d.value)}</span>
-                        <span style={{fontSize:11,color:d.discount>0?"#b91c1c":"#94a3b8"}}>{d.discount>0?`-${formatCOP(d.discount)}`:"—"}</span>
-                        <div style={{fontSize:10,color:"#64748b"}}>{d.products.join(", ")}</div>
-                        <span style={{fontSize:9,color:"#94a3b8"}}>{d.date}</span>
+
+            <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
+              {/* Pedidos recientes */}
+              <div style={s.card}>
+                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>🛒 Pedidos recientes</span>
+                  <button onClick={()=>setTab("Pedidos")} style={{fontSize:11,color:"#6366f1",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>Ver todos →</button>
+                </div>
+                {db.orders.length===0?<EmptyState icon="🛒" text="Sin pedidos aún"/>:
+                  db.orders.slice(0,4).map(o=>{
+                    const sc=ORDER_STATE_COLORS[o.state]||ORDER_STATE_COLORS["Pendiente"];
+                    const client=db.clients.find(c=>c.id===Number(o.clientId));
+                    return (
+                      <div key={o.id} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div>
+                          <div style={{fontWeight:700,fontSize:13}}>#{String(o.id).padStart(4,"0")} {client?`· ${client.name}`:""}</div>
+                          <div style={{background:sc.bg,color:sc.text,padding:"1px 8px",borderRadius:20,fontSize:10,fontWeight:700,display:"inline-block",marginTop:3}}>● {o.state}</div>
+                        </div>
+                        <div style={{fontWeight:800,fontSize:14}}>{formatCOP(o.total)}</div>
                       </div>
-                    ))}
+                    );
+                  })
+                }
+              </div>
+
+              {/* Stock bajo */}
+              <div style={s.card}>
+                <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>🔔 Stock bajo</span>
+                  {lowStock.length>0&&<Badge color="red">{lowStock.length}</Badge>}
+                </div>
+                {lowStock.length===0?<EmptyState icon="✅" text="Todo el stock está OK"/>:
+                  lowStock.map(p=>(
+                    <div key={p.id} style={{padding:"9px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                      <Badge color={p.stock===0?"red":"yellow"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─── PEDIDOS ─── */}
+        {tab==="Pedidos"&&(
+          <>
+            <div style={s.header}>
+              <h1 style={s.title}>🛒 Pedidos</h1>
+              <Btn onClick={()=>{setEditingOrder(null);setShowOrderForm(true);}}>+ Nuevo pedido</Btn>
+            </div>
+
+            {/* Filtro por estado */}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+              {["Todos","Pendiente","En proceso","Enviado","Entregado","Cancelado"].map(st=>{
+                const count=st==="Todos"?db.orders.length:db.orders.filter(o=>o.state===st).length;
+                const sc=ORDER_STATE_COLORS[st]||{bg:"#f1f5f9",text:"#334155"};
+                return (
+                  <button key={st} onClick={()=>setTab("Pedidos:"+st)}
+                    style={{padding:"6px 12px",borderRadius:8,border:"1.5px solid #e2e8f0",background:"#fff",color:"#334155",cursor:"pointer",fontSize:12,fontWeight:600}}>
+                    {st} <span style={{background:sc.bg,color:sc.text,padding:"1px 6px",borderRadius:20,fontSize:10,fontWeight:800,marginLeft:4}}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {db.orders.length===0?<EmptyState icon="🛒" text="Sin pedidos. Crea el primero con '+ Nuevo pedido'"/>:
+              db.orders.map(o=>(
+                <OrderCard key={o.id} order={o} db={db}
+                  onEdit={(order)=>{setEditingOrder(order);setShowOrderForm(true);}}
+                  onAdvance={advanceOrder}
+                  onCancel={(id)=>{ if(confirm("¿Cancelar este pedido?")) cancelOrder(id); }}
+                  onPDF={handleOrderPDF}
+                />
+              ))
+            }
+          </>
+        )}
+
+        {/* ─── INVENTARIO ─── */}
+        {tab==="Inventario"&&(
+          <>
+            <div style={s.header}><h1 style={s.title}>📦 Inventario</h1><Btn onClick={()=>openMovModal()}>🔄 Movimiento</Btn></div>
+            <div style={s.toolbar}>
+              <div style={s.searchW}>
+                <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#94a3b8",fontSize:14}}>🔍</span>
+                <input style={s.searchI} placeholder="Buscar producto…" id="inv-search"/>
+              </div>
+            </div>
+            <div style={s.card}>
+              {db.products.length===0?<EmptyState icon="📦" text="Sin productos"/>:
+                db.products.map(p=>{
+                  const cat=db.categories.find(c=>c.id===p.categoryId);
+                  const prov=db.providers.find(v=>v.id===p.providerId);
+                  const sc=p.stock===0?"red":p.stock<=(db.settings.lowStockThreshold||5)?"yellow":"green";
+                  return (
+                    <div key={p.id} style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:700,fontSize:14}}>{p.name}</div>
+                        <div style={{fontSize:11,color:"#6366f1",fontFamily:"monospace",fontWeight:600}}>{p.sku}</div>
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                          {cat&&<Badge color="blue">{cat.name}</Badge>}
+                          {prov&&<span style={{fontSize:10,color:"#94a3b8"}}>🏭 {prov.name}</span>}
+                        </div>
+                        <div style={{fontSize:12,color:"#64748b",marginTop:4}}>Precio: <strong>{formatCOP(p.price)}</strong> · Costo: {formatCOP(p.cost)}</div>
+                      </div>
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                        <Badge color={sc}>{p.stock} {p.unit}</Badge>
+                        <button style={{...s.iconBtn,fontSize:14}} onClick={()=>openMovModal(p)}>🔄</button>
+                      </div>
+                    </div>
+                  );
+                })
+              }
+            </div>
+          </>
+        )}
+
+        {/* ─── MOVIMIENTOS ─── */}
+        {tab==="Movimientos"&&(
+          <>
+            <div style={s.header}><h1 style={s.title}>🔄 Movimientos</h1><Btn onClick={()=>openMovModal()}>+ Registrar</Btn></div>
+            {db.movements.length===0?<EmptyState icon="📋" text="Sin movimientos"/>:
+              db.movements.map(m=>{
+                const prod=db.products.find(p=>p.id===m.productId);
+                return (
+                  <div key={m.id} style={{...s.card,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <span style={{fontSize:22}}>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}</span>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:13}}>{m.productName}</div>
+                        <div style={{fontSize:10,color:"#94a3b8"}}>{m.date}{m.note?` · ${m.note}`:""}</div>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>{m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}</Badge>
+                      {prod&&m.type==="salida"&&<span style={{fontWeight:700,fontSize:13}}>{formatCOP(prod.price*m.qty)}</span>}
+                    </div>
                   </div>
-                )
+                );
+              })
+            }
+          </>
+        )}
+
+        {/* ─── CLIENTES ─── */}
+        {tab==="Clientes"&&(
+          <CRUDTable title="Clientes" icon="👥" items={db.clients} s={s}
+            columns={[{key:"name",primary:true},{key:"phone",prefix:"📞"},{key:"email",prefix:"✉️"},{key:"address",prefix:"📍"}]}
+            emptyText="Sin clientes registrados"
+            onAdd={addClient} onEdit={editClient} onDelete={deleteClient}
+            renderForm={({initial,onSave,onClose})=>{
+              const [f,setF]=useState(initial||{name:"",phone:"",email:"",address:""});
+              const set=(k,v)=>setF(x=>({...x,[k]:v}));
+              return <div>
+                <Inp label="Nombre *" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Juan Pérez"/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+                  <Inp label="Teléfono" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+57 300…"/>
+                  <Inp label="Email" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="juan@mail.com"/>
+                </div>
+                <Inp label="Dirección" value={f.address} onChange={e=>set("address",e.target.value)} placeholder="Cra 5 #10-20…"/>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
+                </div>
+              </div>;
+            }}
+          />
+        )}
+
+        {/* ─── DOMICILIOS ─── */}
+        {tab==="Domicilios"&&(
+          <>
+            <div style={s.header}><h1 style={s.title}>🛵 Domicilios</h1></div>
+            <div style={s.kpiGrid(3)}>
+              {[
+                {label:"Total",val:db.deliveries.length,color:"#6366f1",icon:"🛵"},
+                {label:"Valor domicilios",val:formatCOP(db.deliveries.reduce((s,d)=>s+d.value,0)),color:"#10b981",icon:"💵"},
+                {label:"Valor pedidos",val:formatCOP(db.deliveries.reduce((s,d)=>s+d.orderValue,0)),color:"#f59e0b",icon:"🛒"},
+              ].map(k=><div key={k.label} style={s.kpiCard(k.color)}><div style={{fontSize:18,marginBottom:5}}>{k.icon}</div><div style={s.kpiVal}>{k.val}</div><div style={s.kpiLabel}>{k.label}</div></div>)}
+            </div>
+            {db.deliveries.length===0?<EmptyState icon="🛵" text="Sin domicilios. Llena el campo Domicilio al registrar un movimiento"/>:
+              db.deliveries.map(d=>(
+                <div key={d.id} style={{...s.card,padding:"12px 16px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                    <div><div style={{fontWeight:700,fontSize:14}}>{d.name}</div>{d.phone&&<div style={{fontSize:11,color:"#64748b"}}>{d.phone}</div>}{d.address&&<div style={{fontSize:11,color:"#64748b"}}>📍 {d.address}</div>}</div>
+                    <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:15,color:"#6366f1"}}>{formatCOP(d.value)}</div><div style={{fontSize:10,color:"#94a3b8"}}>domicilio</div></div>
+                  </div>
+                  <div style={{display:"flex",gap:12,fontSize:12,color:"#64748b",flexWrap:"wrap"}}>
+                    <span>Pedido: <strong style={{color:"#0f172a"}}>{formatCOP(d.orderValue)}</strong></span>
+                    {d.discount>0&&<span>Desc: <strong style={{color:"#b91c1c"}}>-{formatCOP(d.discount)}</strong></span>}
+                    <span style={{color:"#94a3b8"}}>{d.date}</span>
+                  </div>
+                </div>
+              ))
             }
           </>
         )}
@@ -1224,16 +950,15 @@ export default function App() {
         {/* ─── ALERTAS ─── */}
         {tab==="Alertas"&&(
           <>
-            {!isMobile&&<div style={s.header}><h1 style={s.pageTitle}>Alertas de Stock</h1></div>}
-            {outOfStock.length>0&&(
-              <div style={{marginBottom:18}}>
-                <h3 style={{fontWeight:800,color:"#b91c1c",marginBottom:10,fontSize:14}}>🚨 Agotados</h3>
+            <div style={s.header}><h1 style={s.title}>🔔 Alertas de Stock</h1></div>
+            {lowStock.filter(p=>p.stock===0).length>0&&(
+              <div style={{marginBottom:16}}>
+                <div style={{fontWeight:800,color:"#b91c1c",marginBottom:8,fontSize:14}}>🚨 Agotados</div>
                 <div style={s.card}>
-                  {outOfStock.map(p=>(
-                    <div key={p.id} style={{...s.tRow,gridTemplateColumns:isMobile?"1fr auto":"2fr 1fr 1fr 1fr",borderBottom:"1px solid #fee2e2",gap:8}}>
+                  {lowStock.filter(p=>p.stock===0).map(p=>(
+                    <div key={p.id} style={{padding:"11px 16px",borderBottom:"1px solid #fee2e2",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
-                      {!isMobile&&<><Badge color="gray">{p.category}</Badge><Badge color="red">Agotado</Badge></>}
-                      <button style={{...s.btn(),padding:"7px 12px",fontSize:12}} onClick={()=>{setPreProduct(p);setShowMov(true);}}>Reponer</button>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color="red">Agotado</Badge><Btn size="sm" onClick={()=>openMovModal(p)}>Reponer</Btn></div>
                     </div>
                   ))}
                 </div>
@@ -1241,66 +966,299 @@ export default function App() {
             )}
             {lowStock.filter(p=>p.stock>0).length>0&&(
               <div>
-                <h3 style={{fontWeight:800,color:"#a16207",marginBottom:10,fontSize:14}}>⚠️ Stock bajo (≤{LOW_STOCK_THRESHOLD})</h3>
+                <div style={{fontWeight:800,color:"#a16207",marginBottom:8,fontSize:14}}>⚠️ Stock bajo (≤{db.settings.lowStockThreshold||5})</div>
                 <div style={s.card}>
                   {lowStock.filter(p=>p.stock>0).map(p=>(
-                    <div key={p.id} style={{...s.tRow,gridTemplateColumns:isMobile?"1fr auto":"2fr 1fr 1fr 1fr",borderBottom:"1px solid #fef9c3",gap:8}}>
+                    <div key={p.id} style={{padding:"11px 16px",borderBottom:"1px solid #fef9c3",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div><div style={{fontWeight:700,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
-                      {!isMobile&&<><Badge color="gray">{p.category}</Badge><Badge color="yellow">{p.stock} {p.unit}</Badge></>}
-                      <button style={{...s.btn(),padding:"7px 12px",fontSize:12}} onClick={()=>{setPreProduct(p);setShowMov(true);}}>Reponer</button>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}><Badge color="yellow">{p.stock} {p.unit}</Badge><Btn size="sm" onClick={()=>openMovModal(p)}>Reponer</Btn></div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            {lowStock.length===0&&(
-              <div style={{...s.card,padding:"44px",textAlign:"center",color:"#94a3b8"}}>
-                <div style={{fontSize:32,marginBottom:8}}>✅</div>
-                <div>¡Todo el inventario está bien!</div>
-              </div>
-            )}
+            {lowStock.length===0&&<EmptyState icon="✅" text="¡Todo el inventario está en buen estado!"/>}
           </>
-        )}
-
-        {/* ─── CATEGORÍAS ─── */}
-        {tab==="Categorías"&&(
-          <CategoriesTab categories={categories} setCategories={setCategories} products={products} setProducts={setProducts} s={s}/>
         )}
 
         {/* ─── REPORTES ─── */}
         {tab==="Reportes"&&(
-          <ReportesTab movements={movements} products={products} isMobile={isMobile} s={s}/>
+          <>
+            <div style={s.header}><h1 style={s.title}>📈 Reportes</h1></div>
+            {(() => {
+              const salidas=db.movements.filter(m=>m.type==="salida");
+              const topMap={};
+              salidas.forEach(m=>{ if(!topMap[m.productId])topMap[m.productId]={name:m.productName,qty:0,val:0}; const p=db.products.find(x=>x.id===m.productId); topMap[m.productId].qty+=m.qty; topMap[m.productId].val+=p?p.price*m.qty:0; });
+              const top=Object.values(topMap).sort((a,b)=>b.qty-a.qty).slice(0,5);
+              const maxQ=top[0]?.qty||1;
+              const totalSales=salidas.reduce((s,m)=>{const p=db.products.find(x=>x.id===m.productId);return s+(p?p.price*m.qty:0);},0);
+              const sinMov=db.products.filter(p=>!salidas.some(m=>m.productId===p.id));
+              return <>
+                <div style={s.kpiGrid(3)}>
+                  {[
+                    {label:"Total movimientos",val:db.movements.length,color:"#6366f1",icon:"🔄"},
+                    {label:"Salidas registradas",val:salidas.length,color:"#b91c1c",icon:"📤"},
+                    {label:"Ventas acumuladas",val:formatCOP(totalSales),color:"#10b981",icon:"💰"},
+                  ].map(k=><div key={k.label} style={s.kpiCard(k.color)}><div style={{fontSize:18,marginBottom:5}}>{k.icon}</div><div style={s.kpiVal}>{k.val}</div><div style={s.kpiLabel}>{k.label}</div></div>)}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
+                  <div style={s.card}>
+                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9"}}>🏆 Top 5 más vendidos</div>
+                    {top.length===0?<EmptyState icon="📊" text="Sin ventas aún"/>:top.map((item,i)=>(
+                      <div key={i} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                            <span style={{background:i===0?"#fef9c3":"#f1f5f9",color:i===0?"#a16207":"#64748b",width:20,height:20,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800}}>{i+1}</span>
+                            <span style={{fontWeight:700,fontSize:13}}>{item.name}</span>
+                          </div>
+                          <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:13,color:"#b91c1c"}}>{item.qty} und</div><div style={{fontSize:10,color:"#64748b"}}>{formatCOP(item.val)}</div></div>
+                        </div>
+                        <div style={{height:5,background:"#f1f5f9",borderRadius:10}}><div style={{width:`${(item.qty/maxQ)*100}%`,height:"100%",background:i===0?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#6366f1,#8b5cf6)",borderRadius:10}}/></div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={s.card}>
+                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid #f1f5f9"}}>🐢 Baja rotación ({sinMov.length})</div>
+                    {sinMov.length===0?<EmptyState icon="✅" text="Todos los productos se han vendido"/>:sinMov.map(p=>(
+                      <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.sku}</div></div>
+                        <Badge color={p.stock===0?"red":p.stock<=5?"yellow":"gray"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>;
+            })()}
+          </>
         )}
+
+        {/* ─── CONFIG: CATEGORÍAS ─── */}
+        {tab==="Categorías"&&(
+          <CRUDTable title="Categorías" icon="🏷️" items={db.categories} s={s}
+            columns={[{key:"name",primary:true}]} emptyText="Sin categorías"
+            onAdd={addCat} onEdit={editCat} onDelete={deleteCat}
+            renderForm={({initial,onSave,onClose})=>{
+              const [name,setName]=useState(initial?.name||"");
+              return <div>
+                <Inp label="Nombre *" value={name} onChange={e=>setName(e.target.value)} placeholder="Ej: Bebidas"/>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+                  <Btn onClick={()=>{if(!name.trim())return alert("Nombre requerido");onSave({...initial,name:name.trim()});}}>Guardar</Btn>
+                </div>
+              </div>;
+            }}
+          />
+        )}
+
+        {/* ─── CONFIG: PROVEEDORES ─── */}
+        {tab==="Proveedores"&&(
+          <CRUDTable title="Proveedores" icon="🏭" items={db.providers} s={s}
+            columns={[{key:"name",primary:true},{key:"contact",prefix:"👤"},{key:"phone",prefix:"📞"},{key:"email",prefix:"✉️"},{key:"notes"}]}
+            emptyText="Sin proveedores"
+            onAdd={addProvider} onEdit={editProvider} onDelete={deleteProvider}
+            renderForm={({initial,onSave,onClose})=>{
+              const [f,setF]=useState(initial||{name:"",contact:"",phone:"",email:"",notes:""});
+              const set=(k,v)=>setF(x=>({...x,[k]:v}));
+              return <div>
+                <Inp label="Nombre empresa *" value={f.name}    onChange={e=>set("name",e.target.value)}    placeholder="TechDistrib S.A.S"/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+                  <Inp label="Contacto"   value={f.contact} onChange={e=>set("contact",e.target.value)} placeholder="Carlos Ríos"/>
+                  <Inp label="Teléfono"   value={f.phone}   onChange={e=>set("phone",e.target.value)}   placeholder="605-3001001"/>
+                  <Inp label="Email"      value={f.email}   onChange={e=>set("email",e.target.value)}   placeholder="ventas@empresa.co"/>
+                </div>
+                <Inp label="Notas" value={f.notes} onChange={e=>set("notes",e.target.value)} placeholder="Ej: Mínimo 10 unidades, entrega 3 días…"/>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
+                </div>
+              </div>;
+            }}
+          />
+        )}
+
+        {/* ─── CONFIG: MÉTODOS DE PAGO ─── */}
+        {tab==="Métodos de pago"&&(
+          <CRUDTable title="Métodos de pago" icon="💳" items={db.paymentMethods} s={s}
+            columns={[{key:"icon"},{key:"name",primary:true}]} emptyText="Sin métodos de pago"
+            onAdd={addPM} onEdit={editPM} onDelete={deletePM}
+            renderForm={({initial,onSave,onClose})=>{
+              const [f,setF]=useState(initial||{name:"",icon:"💳"});
+              const set=(k,v)=>setF(x=>({...x,[k]:v}));
+              return <div>
+                <div style={{display:"grid",gridTemplateColumns:"80px 1fr",gap:"0 12px"}}>
+                  <Inp label="Ícono" value={f.icon} onChange={e=>set("icon",e.target.value)} placeholder="💵"/>
+                  <Inp label="Nombre *" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Efectivo"/>
+                </div>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
+                </div>
+              </div>;
+            }}
+          />
+        )}
+
+        {/* ─── CONFIG: PRODUCTOS ─── */}
+        {tab==="Productos·Config"&&(
+          <CRUDTable title="Productos" icon="📦" items={db.products} s={s}
+            columns={[{key:"name",primary:true},{key:"sku"},{key:"stock"}]}
+            emptyText="Sin productos"
+            onAdd={addProduct} onEdit={editProduct} onDelete={deleteProduct}
+            renderForm={({initial,onSave,onClose})=>{
+              const [f,setF]=useState(initial||{name:"",sku:"",categoryId:"",providerId:"",price:"",cost:"",stock:"",unit:"und",description:""});
+              const set=(k,v)=>setF(x=>({...x,[k]:v}));
+              return <div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+                  <Inp label="Nombre *"      value={f.name}  onChange={e=>set("name",e.target.value)}  placeholder="Producto"/>
+                  <Inp label="SKU *"         value={f.sku}   onChange={e=>set("sku",e.target.value)}   placeholder="SKU-001"/>
+                  <Sel label="Categoría"     value={f.categoryId} onChange={e=>set("categoryId",Number(e.target.value))}
+                    options={[{value:"",label:"— Sin categoría —"},...db.categories.map(c=>({value:c.id,label:c.name}))]}/>
+                  <Sel label="Proveedor"     value={f.providerId} onChange={e=>set("providerId",Number(e.target.value))}
+                    options={[{value:"",label:"— Sin proveedor —"},...db.providers.map(p=>({value:p.id,label:p.name}))]}/>
+                  <Inp label="Precio venta *" type="number" value={f.price}  onChange={e=>set("price",+e.target.value)}  placeholder="0"/>
+                  <Inp label="Costo"          type="number" value={f.cost}   onChange={e=>set("cost",+e.target.value)}   placeholder="0"/>
+                  <Inp label="Stock *"        type="number" value={f.stock}  onChange={e=>set("stock",+e.target.value)}  placeholder="0"/>
+                  <Inp label="Unidad"                       value={f.unit}   onChange={e=>set("unit",e.target.value)}    placeholder="und, kg…"/>
+                </div>
+                <Inp label="Descripción" value={f.description} onChange={e=>set("description",e.target.value)} placeholder="Opcional"/>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+                  <Btn onClick={()=>{if(!f.name||!f.sku||f.stock==="")return alert("Campos requeridos incompletos");onSave({...initial,...f});}}>Guardar</Btn>
+                </div>
+              </div>;
+            }}
+          />
+        )}
+
+        {/* ─── AJUSTES ─── */}
+        {tab==="Ajustes"&&(()=>{
+          const [cfg,setCfg]=useState(db.settings);
+          return <>
+            <div style={s.header}><h1 style={s.title}>⚙️ Ajustes</h1></div>
+            <div style={s.card}>
+              <div style={{padding:"18px 18px"}}>
+                <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>🏪 Información del negocio</div>
+                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:"0 14px"}}>
+                  <Inp label="Nombre del negocio" value={cfg.businessName}    onChange={e=>setCfg(c=>({...c,businessName:e.target.value}))}    placeholder="Mi Negocio"/>
+                  <Inp label="Teléfono"           value={cfg.businessPhone}   onChange={e=>setCfg(c=>({...c,businessPhone:e.target.value}))}   placeholder="+57 300…"/>
+                </div>
+                <Inp label="Dirección"            value={cfg.businessAddress} onChange={e=>setCfg(c=>({...c,businessAddress:e.target.value}))} placeholder="Cra 5 #10-20, Ciudad"/>
+                <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
+                <div style={{fontWeight:700,fontSize:13,marginBottom:14,color:"#0f172a"}}>📦 Inventario</div>
+                <Inp label={`Umbral de stock bajo (actual: ${cfg.lowStockThreshold})`} type="number" value={cfg.lowStockThreshold} onChange={e=>setCfg(c=>({...c,lowStockThreshold:Number(e.target.value)}))} placeholder="5"/>
+                <div style={{height:1,background:"#f1f5f9",margin:"14px 0"}}/>
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <Btn onClick={()=>saveSettings(cfg)}>💾 Guardar ajustes</Btn>
+                </div>
+              </div>
+            </div>
+            <div style={{...s.card,padding:"14px 18px",marginTop:14}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:"#b91c1c"}}>⚠️ Zona de peligro</div>
+              <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Elimina todos los datos de la base de datos. Esta acción no se puede deshacer.</div>
+              <Btn variant="danger" onClick={()=>{ if(confirm("¿Seguro? Esto borrará TODOS los datos permanentemente.")) { localStorage.removeItem(DB_KEY); window.location.reload(); } }}>🗑️ Reiniciar base de datos</Btn>
+            </div>
+          </>;
+        })()}
+
       </main>
 
-      {/* ── BOTTOM NAV (solo móvil) ── */}
+      {/* ── BOTTOM NAV (móvil) ── */}
       {isMobile&&(
         <nav style={s.bottomNav}>
-          {TABS.map(t=>(
-            <button key={t} onClick={()=>setTab(t)} style={s.bottomItem(tab===t)}>
-              <span style={{fontSize:18,position:"relative"}}>
-                {navIcon(t)}
-                {t==="Alertas"&&lowStock.length>0&&<span style={{position:"absolute",top:-4,right:-6,background:"#ef4444",color:"#fff",borderRadius:20,fontSize:8,fontWeight:800,padding:"0 4px",lineHeight:"14px"}}>{lowStock.length}</span>}
-              </span>
-              <span style={{fontSize:9,lineHeight:1}}>{t}</span>
-            </button>
-          ))}
+          {["Dashboard","Pedidos","Inventario","Reportes","Alertas"].map(t=>{
+            const badge=t==="Alertas"&&lowStock.length>0?lowStock.length:t==="Pedidos"&&pendOrders.length>0?pendOrders.length:null;
+            return (
+              <button key={t} onClick={()=>setTab(t)} style={s.bottomBtn(tab===t)}>
+                <span style={{fontSize:18,position:"relative"}}>
+                  {NAV_ICONS[t]}
+                  {badge&&<span style={{position:"absolute",top:-4,right:-6,background:"#ef4444",color:"#fff",borderRadius:20,fontSize:8,fontWeight:800,padding:"0 4px",lineHeight:"14px"}}>{badge}</span>}
+                </span>
+                <span style={{fontSize:9,lineHeight:1}}>{t}</span>
+              </button>
+            );
+          })}
         </nav>
       )}
 
-      {/* ── MODALS ── */}
-      {showAdd  &&<Modal title="Agregar producto" onClose={()=>setShowAdd(false)}><ProductForm categories={categories} onSave={addProduct} onClose={()=>setShowAdd(false)}/></Modal>}
-      {editProd &&<Modal title="Editar producto"  onClose={()=>setEditProd(null)}><ProductForm categories={categories} initial={editProd} onSave={updateProduct} onClose={()=>setEditProd(null)}/></Modal>}
-      {showMov&&<MovementModal preProduct={preProduct} allProducts={products} onClose={()=>{setShowMov(false);setPreProduct(null);}} onSave={registerMovement}/>}
-      {deleteId&&(
-        <Modal title="Eliminar producto" onClose={()=>setDeleteId(null)}>
-          <p style={{color:"#475569",marginBottom:20}}>¿Seguro que deseas eliminar este producto?</p>
-          <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-            <button onClick={()=>setDeleteId(null)} style={s.btn("secondary")}>Cancelar</button>
-            <button onClick={()=>deleteProduct(deleteId)} style={s.btn("danger")}>Sí, eliminar</button>
+      {/* ── MODAL: NUEVO/EDITAR PEDIDO ── */}
+      {showOrderForm&&(
+        <Modal title={editingOrder?"Editar pedido":"Nuevo pedido"} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}} maxWidth={640}>
+          <OrderForm db={db} setDB={setDB} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
+        </Modal>
+      )}
+
+      {/* ── MODAL: MOVIMIENTO DE INVENTARIO ── */}
+      {showMovForm&&(
+        <Modal title="Registrar movimiento" onClose={()=>setShowMovForm(false)} maxWidth={600}>
+          {/* Tipo */}
+          <div style={{display:"flex",gap:8,marginBottom:14}}>
+            {[{key:"entrada",icon:"📥",label:"Entrada",c:"#15803d",bg:"#dcfce7"},{key:"salida",icon:"📤",label:"Salida",c:"#b91c1c",bg:"#fee2e2"},{key:"ajuste",icon:"🔄",label:"Ajuste",c:"#1d4ed8",bg:"#dbeafe"}].map(t=>(
+              <button key={t.key} onClick={()=>setMovType(t.key)} style={{flex:1,padding:"9px 0",borderRadius:9,border:movType===t.key?`2px solid ${t.c}`:"1.5px solid #e2e8f0",background:movType===t.key?t.bg:"#f8fafc",cursor:"pointer",fontWeight:700,color:movType===t.key?t.c:"#64748b",fontSize:12}}>
+                {t.icon}<br/>{t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Productos */}
+          <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>📦 Productos</div>
+          {movLines.map((line,idx)=>{
+            const prod=db.products.find(p=>p.id===Number(line.productId));
+            return (
+              <div key={idx} style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:8}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 80px 30px",gap:8,alignItems:"end"}}>
+                  <div>
+                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Producto</label>
+                    <select value={line.productId} onChange={e=>{ const nl=[...movLines]; nl[idx]={...nl[idx],productId:e.target.value}; setMovLines(nl); }}
+                      style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:14,color:line.productId?"#0f172a":"#94a3b8",background:"#fff",outline:"none"}}>
+                      <option value="">— Selecciona —</option>
+                      {db.products.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stock} {p.unit}</option>)}
+                    </select>
+                    {prod&&<div style={{fontSize:10,color:"#6366f1",fontWeight:600,marginTop:3}}>{prod.sku} · {formatCOP(prod.price)} · Stock: {prod.stock}</div>}
+                  </div>
+                  <div>
+                    <label style={{display:"block",fontSize:11,fontWeight:600,color:"#64748b",marginBottom:3}}>Cant.</label>
+                    <input type="number" value={line.qty} onChange={e=>{ const nl=[...movLines]; nl[idx]={...nl[idx],qty:e.target.value}; setMovLines(nl); }} placeholder="0"
+                      style={{width:"100%",padding:"8px 8px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:15,fontWeight:700,color:"#0f172a",outline:"none",background:"#fff",boxSizing:"border-box"}}/>
+                  </div>
+                  <button onClick={()=>setMovLines(l=>l.filter((_,i)=>i!==idx))} disabled={movLines.length===1}
+                    style={{padding:"8px",borderRadius:8,border:"none",background:movLines.length===1?"#f1f5f9":"#fee2e2",color:movLines.length===1?"#cbd5e1":"#b91c1c",cursor:movLines.length===1?"not-allowed":"pointer",fontSize:15,fontWeight:700,alignSelf:"end"}}>×</button>
+                </div>
+              </div>
+            );
+          })}
+          <button onClick={()=>setMovLines(l=>[...l,{productId:"",qty:""}])} style={{width:"100%",padding:"8px",borderRadius:8,border:"1.5px dashed #c7d2fe",background:"#eef2ff",color:"#6366f1",cursor:"pointer",fontWeight:700,fontSize:13,marginBottom:8}}>+ Agregar producto</button>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <Inp label="Nota" value={movNote} onChange={e=>setMovNote(e.target.value)} placeholder="Referencia…"/>
+            <Inp label="Descuento" type="number" value={movDiscount} onChange={e=>setMovDiscount(e.target.value)} placeholder="0"/>
+          </div>
+
+          <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
+          <div style={{background:"#f8fafc",borderRadius:9,padding:"10px 12px",border:"1.5px solid #e2e8f0",marginBottom:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
+              <Inp label="Cliente" value={movDelivery.name}    onChange={e=>setMovDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
+              <Inp label="Teléfono" value={movDelivery.phone}  onChange={e=>setMovDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
+            </div>
+            <Inp label="Dirección" value={movDelivery.address} onChange={e=>setMovDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
+            <Inp label="Valor domicilio" type="number" value={movDelivery.value} onChange={e=>setMovDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
+          </div>
+
+          {resolvedMovLines.length>0&&(
+            <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:10,padding:"10px 14px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{color:"rgba(255,255,255,0.75)",fontSize:11}}>TOTAL</span>
+              <span style={{color:"#fff",fontWeight:900,fontSize:18}}>{formatCOP(movTotal)}</span>
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:10,borderTop:"1px solid #f1f5f9"}}>
+            <Btn variant="secondary" onClick={()=>setShowMovForm(false)}>Cancelar</Btn>
+            <Btn onClick={handleMovSave} disabled={movGen}>
+              {movGen?"⏳ Generando PDF…":movType==="salida"?"✅ Confirmar y descargar factura":"✅ Confirmar movimiento"}
+            </Btn>
           </div>
         </Modal>
       )}
+
     </div>
   );
 }
