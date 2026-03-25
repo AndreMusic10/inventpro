@@ -48,7 +48,7 @@ export function useDB() {
       const mapProduct   = p => ({ id:p.id, name:p.name, sku:p.sku, categoryId:p.category_id, providerId:p.provider_id, price:Number(p.price), cost:Number(p.cost), stock:p.stock, unit:p.unit, description:p.description, image:p.image||"" })
       const mapOrder     = o => ({ id:o.id, clientId:o.client_id, paymentMethodId:o.payment_method_id, state:o.state, items:o.items||[], note:o.note, discount:Number(o.discount||0), delivery:o.delivery, total:Number(o.total||0), createdAt:new Date(o.created_at).toLocaleString('es-CO'), updatedAt:new Date(o.updated_at).toLocaleString('es-CO') })
       const mapMovement  = m => ({ id:m.id, productId:m.product_id, productName:m.product_name, sku:m.sku, type:m.type, qty:m.qty, note:m.note, stockAfter:m.stock_after, discount:Number(m.discount||0), date:new Date(m.created_at).toLocaleString('es-CO') })
-      const mapDelivery  = d => ({ id:d.id, name:d.name, phone:d.phone, address:d.address, value:Number(d.value||0), orderValue:Number(d.order_value||0), discount:Number(d.discount||0), products:d.products||[], date:new Date(d.created_at).toLocaleString('es-CO') })
+      const mapDelivery  = d => ({ id:d.id, name:d.name, phone:d.phone, address:d.address, value:Number(d.value||0), orderValue:Number(d.order_value||0), discount:Number(d.discount||0), products:d.products||[], orderId:d.order_id||null, date:new Date(d.created_at).toLocaleString('es-CO') })
       const mapPM        = p => ({ id:p.id, name:p.name, icon:p.icon })
       const mapSettings  = s => ({ businessName:s.business_name, businessPhone:s.business_phone||'', businessAddress:s.business_address||'', lowStockThreshold:s.low_stock_threshold||5 })
 
@@ -299,6 +299,7 @@ export function useDB() {
         value:       Number(d.delivery.value) || 0,
         order_value: d.total,
         discount:    d.discount || 0,
+        order_id:    data.id,       // ← vínculo con el pedido
         products:    d.items.map(l => {
           const p = db.products.find(x => x.id === Number(l.productId))
           return p ? `${p.name} x${l.qty}` : `Producto x${l.qty}`
@@ -371,7 +372,7 @@ export function useDB() {
   const cancelOrder = async (id) => {
     const order = db.orders.find(o => o.id === id)
 
-    // Devolver stock primero: entrada por cada producto del pedido
+    // 1. Devolver stock: entrada por cada producto del pedido
     if (order) {
       const noteDevolucion = `Cancelación pedido #${String(id).padStart(4,'0')}`
       for (const line of order.items) {
@@ -381,7 +382,14 @@ export function useDB() {
       }
     }
 
-    // Eliminar el pedido definitivamente de la base de datos
+    // 2. Eliminar el domicilio vinculado al pedido (si existe)
+    const linkedDelivery = db.deliveries.find(d => d.orderId === id)
+    if (linkedDelivery) {
+      await supabase.from('deliveries').delete().eq('id', linkedDelivery.id)
+      setDb(db => ({ ...db, deliveries: db.deliveries.filter(d => d.id !== linkedDelivery.id) }))
+    }
+
+    // 3. Eliminar el pedido definitivamente
     check(await supabase.from('orders').delete().eq('id', id))
     setDb(db => ({ ...db, orders: db.orders.filter(o => o.id !== id) }))
   }
