@@ -1,0 +1,18 @@
+{
+  "root": "dist",
+  "clean_urls": false,
+  "routes": {
+    "/sw.js": "/sw.js",
+    "/manifest.json": "/manifest.json",
+    "/assets/**": "/assets/$1",
+    "/**": "/index.html"
+  },
+  "headers": {
+    "/index.html": {
+      "Cache-Control": "no-cache, no-store, must-revalidate"
+    },
+    "/assets/**": {
+      "Cache-Control": "public, max-age=31536000, immutable"
+    }
+  }
+}
