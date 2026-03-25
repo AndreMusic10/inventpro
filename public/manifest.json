@@ -1,6 +1,6 @@
 {
-  "name": "InvenPro - Control de Inventario",
-  "short_name": "InvenPro",
+  "name": "InventApp - Control de Inventario",
+  "short_name": "InventApp",
   "description": "Control de inventario para tu negocio",
   "start_url": "/",
   "scope": "/",
