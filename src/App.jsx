@@ -1522,20 +1522,72 @@ export default function App() {
           <CRUDTable title="Clientes" icon="👥" items={db.clients} s={s}
             columns={[{key:"name",primary:true},{key:"phone",prefix:"📞"},{key:"email",prefix:"✉️"},{key:"address",prefix:"📍"}]}
             emptyText="Sin clientes registrados"
-            onAdd={addClient} onEdit={editClient} onDelete={deleteClient}
+            onAdd={async(d)=>{
+              const result = await addClient(d);
+              if (result?.existing) {
+                alert(`⚠️ Ya existe un cliente con ese nombre, teléfono o email:\n\n👤 ${result.client.name}\n📞 ${result.client.phone||"—"}\n✉️ ${result.client.email||"—"}\n\nNo se creó un duplicado.`);
+              }
+            }}
+            onEdit={editClient} onDelete={deleteClient}
             renderForm={({initial,onSave,onClose})=>{
               const [f,setF]=useState(initial||{name:"",phone:"",email:"",address:""});
-              const set=(k,v)=>setF(x=>({...x,[k]:v}));
+              const [dupWarning,setDupWarning]=useState(null);
+              const set=(k,v)=>{
+                setF(x=>({...x,[k]:v}));
+                setDupWarning(null); // limpiar aviso al editar
+              };
+              // Detectar duplicado en tiempo real (solo al crear)
+              const checkDup = (field, val) => {
+                if (initial) return; // no chequeamos al editar
+                const norm = s=>(s||"").trim().toLowerCase();
+                const found = db.clients.find(c =>
+                  (field==="phone" && val && norm(c.phone)===norm(val)) ||
+                  (field==="email" && val && norm(c.email)===norm(val)) ||
+                  (field==="name"  && val && norm(c.name) ===norm(val))
+                );
+                setDupWarning(found ? found : null);
+              };
               return <div>
-                <Inp label="Nombre *" value={f.name} onChange={e=>set("name",e.target.value)} placeholder="Juan Pérez"/>
+                <Inp label="Nombre *" value={f.name}
+                  onChange={e=>{ set("name",e.target.value); checkDup("name",e.target.value); }}
+                  placeholder="Juan Pérez"/>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-                  <Inp label="Teléfono" value={f.phone} onChange={e=>set("phone",e.target.value)} placeholder="+57 300…"/>
-                  <Inp label="Email" value={f.email} onChange={e=>set("email",e.target.value)} placeholder="juan@mail.com"/>
+                  <Inp label="Teléfono" value={f.phone}
+                    onChange={e=>{ set("phone",e.target.value); checkDup("phone",e.target.value); }}
+                    placeholder="+57 300…"/>
+                  <Inp label="Email" value={f.email}
+                    onChange={e=>{ set("email",e.target.value); checkDup("email",e.target.value); }}
+                    placeholder="juan@mail.com"/>
                 </div>
                 <Inp label="Dirección" value={f.address} onChange={e=>set("address",e.target.value)} placeholder="Cra 5 #10-20…"/>
+
+                {/* Aviso de duplicado */}
+                {dupWarning&&!initial&&(
+                  <div style={{background:"rgba(255,149,0,.1)",border:"1.5px solid rgba(255,149,0,.3)",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"#ff9500",marginBottom:6}}>⚠️ Cliente ya registrado</div>
+                    <div style={{fontSize:12,color:"var(--text4)",marginBottom:10}}>
+                      Encontramos un cliente con la misma información:
+                    </div>
+                    <div style={{background:"var(--bg2)",borderRadius:9,padding:"10px 12px",fontSize:12,marginBottom:10}}>
+                      <div style={{fontWeight:700,color:"var(--text)",marginBottom:3}}>👤 {dupWarning.name}</div>
+                      {dupWarning.phone&&<div style={{color:"var(--text4)"}}>📞 {dupWarning.phone}</div>}
+                      {dupWarning.email&&<div style={{color:"var(--text4)"}}>✉️ {dupWarning.email}</div>}
+                      {dupWarning.address&&<div style={{color:"var(--text4)"}}>📍 {dupWarning.address}</div>}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--text4)"}}>
+                      Si guardas, se usará el cliente existente en lugar de crear uno nuevo.
+                    </div>
+                  </div>
+                )}
+
                 <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
                   <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{if(!f.name)return alert("Nombre requerido");onSave({...initial,...f});}}>Guardar</Btn>
+                  <Btn onClick={()=>{
+                    if(!f.name) return alert("Nombre requerido");
+                    onSave({...initial,...f});
+                  }}>
+                    {dupWarning&&!initial ? "Usar cliente existente" : "Guardar"}
+                  </Btn>
                 </div>
               </div>;
             }}

@@ -126,9 +126,26 @@ export function useDB() {
   //  CLIENTS
   // ══════════════════════════════════════════════════════════════════════════
   const addClient = async (d) => {
-    const { data, error } = await supabase.from('clients').insert({ name:d.name, phone:d.phone, email:d.email, address:d.address }).select().single()
+    // Buscar duplicado por teléfono, email o nombre exacto (case-insensitive)
+    const normalize = s => (s||"").trim().toLowerCase();
+    const existing = db.clients.find(c =>
+      (d.phone && normalize(c.phone) === normalize(d.phone)) ||
+      (d.email && normalize(c.email) === normalize(d.email)) ||
+      normalize(c.name) === normalize(d.name)
+    );
+
+    if (existing) {
+      // Retorna el cliente existente sin crear uno nuevo
+      return { existing: true, client: existing };
+    }
+
+    const { data, error } = await supabase
+      .from('clients')
+      .insert({ name:d.name, phone:d.phone, email:d.email, address:d.address })
+      .select().single()
     if (error) throw new Error(error.message)
     setDb(db => ({ ...db, clients: [...db.clients, data] }))
+    return { existing: false, client: data };
   }
 
   const editClient = async (d) => {
