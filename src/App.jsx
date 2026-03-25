@@ -574,15 +574,147 @@ const makeStyles = (isMobile) => ({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  DELIVERY CLIENT PICKER
+//  Selector de cliente para domicilios — permite elegir existente
+//  o crear uno nuevo. El cliente es obligatorio si hay domicilio.
+// ═══════════════════════════════════════════════════════════════
+const DeliveryClientPicker = ({db, addClient, delivery, setDelivery}) => {
+  const [mode,       setMode]       = useState("existing"); // "existing" | "new"
+  const [newClient,  setNewClient]  = useState({name:"",phone:"",address:""});
+  const [showFields, setShowFields] = useState(false); // toggle sección completa
+
+  const hasDeliveryValue = Number(delivery.value) > 0;
+
+  // Al seleccionar cliente existente, rellenar campos automáticamente
+  const handleSelectClient = (id) => {
+    const c = db.clients.find(c => c.id === Number(id));
+    if (c) {
+      setDelivery(d => ({...d, clientId:c.id, name:c.name, phone:c.phone||"", address:c.address||""}));
+    } else {
+      setDelivery(d => ({...d, clientId:"", name:"", phone:"", address:""}));
+    }
+  };
+
+  const setNC = (k,v) => {
+    setNewClient(x => ({...x,[k]:v}));
+    // Sincronizar con delivery en tiempo real
+    setDelivery(d => ({...d, [k]:k==="name"?v:k==="phone"?v:k==="address"?v:d[k], clientId:"new"}));
+  };
+
+  return (
+    <div>
+      {/* Toggle para activar domicilio */}
+      <div
+        onClick={()=>setShowFields(f=>!f)}
+        style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"var(--input-bg)",borderRadius:12,border:`1.5px solid ${showFields?"var(--accent)":"var(--border)"}`,cursor:"pointer",marginBottom:showFields?10:0,userSelect:"none"}}
+      >
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>🛵</span>
+          <div>
+            <div style={{fontWeight:600,fontSize:13,color:"var(--text)"}}>Domicilio</div>
+            {!showFields&&delivery.name&&<div style={{fontSize:11,color:"var(--accent)"}}>👤 {delivery.name}</div>}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {delivery.value>0&&<span style={{fontSize:11,fontWeight:700,color:"var(--accent)"}}>{formatCOP(Number(delivery.value))}</span>}
+          <span style={{fontSize:12,color:"var(--text4)"}}>{showFields?"▲":"▼"}</span>
+        </div>
+      </div>
+
+      {showFields && (
+        <div style={{background:"var(--input-bg)",borderRadius:12,padding:"14px",border:"1.5px solid var(--accent)",marginBottom:10,animation:"fadeIn .15s ease"}}>
+
+          {/* Valor del domicilio */}
+          <Inp
+            label="Valor domicilio (COP) *"
+            type="number"
+            value={delivery.value}
+            onChange={e=>setDelivery(d=>({...d,value:e.target.value}))}
+            placeholder="0"
+          />
+
+          {/* Separador */}
+          <div style={{height:1,background:"var(--border)",margin:"4px 0 14px"}}/>
+
+          {/* Tabs: Existente / Nuevo */}
+          <div style={{fontSize:11,fontWeight:700,color:"var(--text4)",textTransform:"uppercase",letterSpacing:.5,marginBottom:10}}>
+            👤 Cliente del domicilio <span style={{color:"var(--destructive,#ff3b30)"}}>*</span>
+          </div>
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            <button
+              onClick={()=>setMode("existing")}
+              style={{flex:1,padding:"8px",borderRadius:10,border:mode==="existing"?"2px solid var(--accent)":"1.5px solid var(--border)",background:mode==="existing"?"rgba(99,102,241,.08)":"var(--bg2)",color:mode==="existing"?"var(--accent)":"var(--text4)",fontWeight:600,fontSize:13,cursor:"pointer"}}
+            >
+              📋 Cliente existente
+            </button>
+            <button
+              onClick={()=>setMode("new")}
+              style={{flex:1,padding:"8px",borderRadius:10,border:mode==="new"?"2px solid var(--accent)":"1.5px solid var(--border)",background:mode==="new"?"rgba(99,102,241,.08)":"var(--bg2)",color:mode==="new"?"var(--accent)":"var(--text4)",fontWeight:600,fontSize:13,cursor:"pointer"}}
+            >
+              ➕ Nuevo cliente
+            </button>
+          </div>
+
+          {/* Selector cliente existente */}
+          {mode==="existing" && (
+            <>
+              <Sel
+                label="Selecciona el cliente"
+                value={delivery.clientId||""}
+                onChange={e=>handleSelectClient(e.target.value)}
+                options={[
+                  {value:"",label:"— Selecciona un cliente —"},
+                  ...db.clients.map(c=>({value:c.id,label:`${c.name}${c.phone?" · "+c.phone:""}${c.address?" · "+c.address:""}`}))
+                ]}
+              />
+              {/* Mostrar info del cliente seleccionado */}
+              {delivery.clientId && (()=>{
+                const c = db.clients.find(c=>c.id===Number(delivery.clientId));
+                return c ? (
+                  <div style={{background:"var(--bg2)",borderRadius:10,padding:"10px 12px",fontSize:12,marginTop:-8,marginBottom:8,border:"1px solid var(--border)"}}>
+                    <div style={{fontWeight:700,color:"var(--text)",marginBottom:3}}>👤 {c.name}</div>
+                    {c.phone   && <div style={{color:"var(--text4)"}}>📞 {c.phone}</div>}
+                    {c.address && <div style={{color:"var(--text4)"}}>📍 {c.address}</div>}
+                  </div>
+                ) : null;
+              })()}
+              {/* Dirección de entrega puede ser diferente */}
+              <Inp
+                label="Dirección de entrega (si es diferente)"
+                value={delivery.address}
+                onChange={e=>setDelivery(d=>({...d,address:e.target.value}))}
+                placeholder="Dejar vacío para usar la del cliente"
+              />
+            </>
+          )}
+
+          {/* Crear cliente nuevo */}
+          {mode==="new" && (
+            <>
+              <div style={{background:"rgba(99,102,241,.05)",borderRadius:10,padding:"10px 12px",border:"1px solid rgba(99,102,241,.15)",marginBottom:12,fontSize:12,color:"var(--text4)"}}>
+                ℹ️ Se creará automáticamente en tu lista de clientes
+              </div>
+              <Inp label="Nombre *"   value={newClient.name}    onChange={e=>setNC("name",e.target.value)}    placeholder="Juan Pérez"/>
+              <Inp label="Teléfono"   value={newClient.phone}   onChange={e=>setNC("phone",e.target.value)}   placeholder="+57 300…"/>
+              <Inp label="Dirección de entrega *" value={newClient.address} onChange={e=>setNC("address",e.target.value)} placeholder="Cra 5 #10-20…"/>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════
 //  ORDERS MODULE
 // ═══════════════════════════════════════════════════════════════
-const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
+const OrderForm = ({db, addOrder, editOrder, addClient, onClose, initial}) => {
   const [lines,   setLines]   = useState(initial?.items||[{productId:"",qty:""}]);
   const [clientId,setClientId]= useState(initial?.clientId||"");
   const [pmId,    setPmId]    = useState(initial?.paymentMethodId||"");
   const [note,    setNote]    = useState(initial?.note||"");
   const [discount,setDiscount]= useState(initial?.discount||"");
-  const [delivery,setDelivery]= useState(initial?.delivery||{name:"",address:"",phone:"",value:""});
+  const [delivery,setDelivery]= useState(initial?.delivery||{name:"",address:"",phone:"",value:"",clientId:""});
 
   const addLine    = ()=>setLines(l=>[...l,{productId:"",qty:""}]);
   const removeLine = (i)=>setLines(l=>l.filter((_,idx)=>idx!==i));
@@ -594,11 +726,27 @@ const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
   const disc = Number(discount)||0;
   const total = subtotal-disc+dv;
 
-  const handleSave = async ()=>{
-    if(resolved.length===0) return alert("Agrega al menos un producto.");
+  const handleSave = async () => {
+    if (resolved.length===0) return alert("Agrega al menos un producto.");
+
+    // Validar: si hay valor de domicilio, debe haber cliente
+    if (dv > 0 && !delivery.name) {
+      return alert("⚠️ El domicilio requiere un cliente.\nSelecciona uno existente o crea uno nuevo.");
+    }
+
     try {
-      if(initial){ await editOrder({...initial,clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total}); }
-      else { await addOrder({clientId,paymentMethodId:pmId,items:lines,note,discount:disc,delivery,total}); }
+      // Si es cliente nuevo, crearlo primero
+      let finalDelivery = {...delivery};
+      if (dv > 0 && delivery.clientId === "new" && delivery.name) {
+        const result = await addClient({name:delivery.name, phone:delivery.phone, address:delivery.address, email:""});
+        if (result?.client) finalDelivery = {...finalDelivery, clientId: result.client.id};
+      }
+
+      if (initial) {
+        await editOrder({...initial, clientId, paymentMethodId:pmId, items:lines, note, discount:disc, delivery:finalDelivery, total});
+      } else {
+        await addOrder({clientId, paymentMethodId:pmId, items:lines, note, discount:disc, delivery:finalDelivery, total});
+      }
       onClose();
     } catch(e) { alert("Error: " + e.message); }
   };
@@ -645,15 +793,7 @@ const OrderForm = ({db, addOrder, editOrder, onClose, initial}) => {
         <Inp label="Descuento (COP)" type="number" value={discount} onChange={e=>setDiscount(e.target.value)} placeholder="0"/>
       </div>
 
-      <div style={{fontSize:12,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,margin:"6px 0 8px"}}>🛵 Domicilio (opcional)</div>
-      <div style={{background:"var(--input-bg)",borderRadius:9,padding:"12px",border:"1.5px solid var(--border)"}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
-          <Inp label="Nombre cliente" value={delivery.name}    onChange={e=>setDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
-          <Inp label="Teléfono"       value={delivery.phone}   onChange={e=>setDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
-        </div>
-        <Inp label="Dirección" value={delivery.address} onChange={e=>setDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
-        <Inp label="Valor domicilio" type="number" value={delivery.value} onChange={e=>setDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
-      </div>
+      <DeliveryClientPicker db={db} addClient={addClient} delivery={delivery} setDelivery={setDelivery}/>
 
       {resolved.length>0&&(
         <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:10,padding:"12px 16px",marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1159,14 +1299,14 @@ export default function App() {
   const [movType,     setMovType]     = useState("salida");
   const [movNote,     setMovNote]     = useState("");
   const [movDiscount, setMovDiscount] = useState("");
-  const [movDelivery, setMovDelivery] = useState({name:"",address:"",phone:"",value:""});
+  const [movDelivery, setMovDelivery] = useState({name:"",address:"",phone:"",value:"",clientId:""});
   const [movProvider, setMovProvider] = useState("");
   const [movGen,      setMovGen]      = useState(false);
 
   const openMovModal = (product=null) => {
     setMovLines(product?[{productId:product.id,qty:""}]:[{productId:"",qty:""}]);
     setMovType("salida"); setMovNote(""); setMovDiscount("");
-    setMovDelivery({name:"",address:"",phone:"",value:""});
+    setMovDelivery({name:"",address:"",phone:"",value:"",clientId:""});
     setMovProvider("");
     setMovPreProduct(product); setShowMovForm(true);
   };
@@ -1189,7 +1329,18 @@ export default function App() {
       : movNote;
 
     // Para entradas/ajustes, no enviar domicilio
-    const delivery = movType==="salida" ? movDelivery : {name:"",address:"",phone:"",value:""};
+    let delivery = movType==="salida" ? movDelivery : {name:"",address:"",phone:"",value:"",clientId:""};
+
+    // Validar: si hay domicilio con valor, debe tener cliente
+    if (movType==="salida" && Number(movDelivery.value)>0 && !movDelivery.name) {
+      return alert("⚠️ El domicilio requiere un cliente.\nSelecciona uno existente o crea uno nuevo en la sección 🛵 Domicilio.");
+    }
+
+    // Si es cliente nuevo en domicilio, crearlo primero
+    if (movType==="salida" && movDelivery.clientId==="new" && movDelivery.name) {
+      const result = await addClient({name:movDelivery.name, phone:movDelivery.phone, address:movDelivery.address, email:""});
+      if (result?.client) delivery = {...delivery, clientId: result.client.id};
+    }
 
     try {
       await registerMovement(resolvedMovLines, movType, noteConProveedor, movDiscount, delivery);
@@ -1662,9 +1813,34 @@ export default function App() {
           <>
             <div style={s.header}><h1 style={s.title}>📈 Reportes</h1></div>
             {(() => {
-              const salidas = db.movements.filter(m => m.type === "salida");
+              // Todos los movimientos de salida
+              const todasSalidas = db.movements.filter(m => m.type === "salida");
 
-              // Acumulados por producto
+              // IDs de pedidos cancelados (sus notas empiezan con "Cancelación pedido #XXXX")
+              const cancelacionIds = new Set(
+                db.movements
+                  .filter(m => m.type === "entrada" && m.note?.startsWith("Cancelación pedido #"))
+                  .map(m => m.note.match(/#(\d+)/)?.[1])
+                  .filter(Boolean)
+              );
+
+              // Salidas reales = excluir las que pertenecen a pedidos cancelados
+              const salidas = todasSalidas.filter(m => {
+                const pedidoId = m.note?.match(/Pedido #(\d+)/)?.[1];
+                return !pedidoId || !cancelacionIds.has(pedidoId);
+              });
+
+              // Monto devuelto por cancelaciones (para mostrarlo informativo)
+              const salidasCanceladas = todasSalidas.filter(m => {
+                const pedidoId = m.note?.match(/Pedido #(\d+)/)?.[1];
+                return pedidoId && cancelacionIds.has(pedidoId);
+              });
+              const totalCancelado = salidasCanceladas.reduce((s, m) => {
+                const p = db.products.find(x => x.id === m.productId);
+                return s + (p ? p.price * m.qty : 0);
+              }, 0);
+
+              // Acumulados por producto (solo ventas válidas)
               const topMap = {};
               salidas.forEach(m => {
                 const p = db.products.find(x => x.id === m.productId);
@@ -1674,10 +1850,10 @@ export default function App() {
                 topMap[m.productId].profit += p ? (p.price - p.cost) * m.qty : 0;
               });
 
-              const top      = Object.values(topMap).sort((a,b) => b.qty - a.qty).slice(0, 5);
-              const maxQ     = top[0]?.qty || 1;
+              const top  = Object.values(topMap).sort((a,b) => b.qty - a.qty).slice(0, 5);
+              const maxQ = top[0]?.qty || 1;
 
-              // KPIs globales
+              // KPIs globales (solo ventas no canceladas)
               const totalSales  = salidas.reduce((s, m) => { const p = db.products.find(x => x.id === m.productId); return s + (p ? p.price * m.qty : 0); }, 0);
               const totalCost   = salidas.reduce((s, m) => { const p = db.products.find(x => x.id === m.productId); return s + (p ? p.cost  * m.qty : 0); }, 0);
               const totalProfit = totalSales - totalCost;
@@ -1722,12 +1898,18 @@ export default function App() {
                       <div style={{fontSize:11, color:"var(--text4)", marginTop:3}}>Costo producto × unidades</div>
                     </div>
                     {/* Ganancia */}
+                  {/* Ganancia */}
                     <div style={{background:"rgba(52,199,89,0.07)", borderRadius:14, padding:"14px 16px", border:`1px solid ${totalProfit >= 0 ? "rgba(52,199,89,0.2)" : "rgba(255,59,48,0.2)"}`}}>
                       <div style={{fontSize:11, fontWeight:600, color: totalProfit >= 0 ? "#34c759" : "var(--destructive,#ff3b30)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6}}>
                         {totalProfit >= 0 ? "✅ Ganancia neta" : "❌ Pérdida neta"}
                       </div>
                       <div style={{fontSize:22, fontWeight:700, color: totalProfit >= 0 ? "#34c759" : "var(--destructive,#ff3b30)", letterSpacing:-0.5}}>{formatCOP(totalProfit)}</div>
-                      <div style={{fontSize:11, color:"var(--text4)", marginTop:3}}>Ingresos − Costos · {margin}% margen</div>
+                      <div style={{fontSize:11, color:"var(--text4)", marginTop:4}}>Ingresos − Costos · {margin}% margen</div>
+                      {totalCancelado > 0 && (
+                        <div style={{fontSize:11, color:"#ff9500", marginTop:6, padding:"4px 8px", background:"rgba(255,149,0,.08)", borderRadius:8, display:"inline-block"}}>
+                          🚫 {formatCOP(totalCancelado)} descontado por cancelaciones
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1863,7 +2045,7 @@ export default function App() {
       {/* ── MODAL: NUEVO/EDITAR PEDIDO ── */}
       {showOrderForm&&(
         <Modal title={editingOrder?"Editar pedido":"Nuevo pedido"} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}} maxWidth={640}>
-        <OrderForm db={db} addOrder={addOrder} editOrder={editOrder} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
+        <OrderForm db={db} addOrder={addOrder} editOrder={editOrder} addClient={addClient} initial={editingOrder} onClose={()=>{setShowOrderForm(false);setEditingOrder(null);}}/>
         </Modal>
       )}
 
@@ -1963,19 +2145,9 @@ export default function App() {
             </>
           )}
 
-          {/* SALIDA: domicilio */}
+          {/* SALIDA: domicilio con cliente obligatorio */}
           {movType==="salida" && (
-            <>
-              <div style={{fontSize:11,fontWeight:700,color:"var(--text2)",textTransform:"uppercase",letterSpacing:0.6,marginBottom:8}}>🛵 Domicilio (opcional)</div>
-              <div style={{background:"var(--input-bg)",borderRadius:9,padding:"10px 12px",border:"1.5px solid var(--border)",marginBottom:10}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px"}}>
-                  <Inp label="Cliente"  value={movDelivery.name}    onChange={e=>setMovDelivery(d=>({...d,name:e.target.value}))}    placeholder="Juan Pérez"/>
-                  <Inp label="Teléfono" value={movDelivery.phone}   onChange={e=>setMovDelivery(d=>({...d,phone:e.target.value}))}   placeholder="+57 300…"/>
-                </div>
-                <Inp label="Dirección"     value={movDelivery.address} onChange={e=>setMovDelivery(d=>({...d,address:e.target.value}))} placeholder="Cra 5 #10-20…"/>
-                <Inp label="Valor domicilio" type="number" value={movDelivery.value} onChange={e=>setMovDelivery(d=>({...d,value:e.target.value}))} placeholder="0"/>
-              </div>
-            </>
+            <DeliveryClientPicker db={db} addClient={addClient} delivery={movDelivery} setDelivery={setMovDelivery}/>
           )}
 
           {resolvedMovLines.length>0&&(
