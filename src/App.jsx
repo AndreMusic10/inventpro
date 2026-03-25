@@ -34,7 +34,7 @@ const getPlatform = () => {
 // ═══════════════════════════════════════════════════════════════
 //  THEME SYSTEM
 // ═══════════════════════════════════════════════════════════════
-const THEME_KEY = "invenpro_theme";
+const THEME_KEY = "inventapp_theme";
 
 const THEMES = {
   light: {
@@ -118,9 +118,9 @@ const useTheme = () => {
 };
 
 const injectGlobalCSS = () => {
-  if (document.getElementById("invenpro-theme-css")) return;
+  if (document.getElementById("inventapp-theme-css")) return;
   const style = document.createElement("style");
-  style.id = "invenpro-theme-css";
+  style.id = "inventapp-theme-css";
   style.textContent = `
     /* ── Reset & Base ─────────────────────────────────── */
     *, *::before, *::after {
@@ -224,7 +224,7 @@ const injectGlobalCSS = () => {
 //  PUSH NOTIFICATIONS — cada 8 horas
 // ═══════════════════════════════════════════════════════════════
 const NOTIFY_INTERVAL = 8 * 60 * 60 * 1000;
-const NOTIFY_TS_KEY   = "invenpro_last_notify";
+const NOTIFY_TS_KEY   = "inventapp_last_notify";
 
 const useNotifications = (db) => {
   const [permission, setPermission] = useState(
@@ -359,7 +359,7 @@ const generateInvoicePDF = async (items, opts, invoiceNum) => {
   doc.setFillColor(...DARK); doc.rect(0,277,W,20,"F");
   doc.setFillColor(...RED); doc.rect(0,277,5,20,"F");
   doc.setTextColor(180,190,210); doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
-  doc.text(`InvenPro  \u00B7  Factura N\u00B0 ${invoiceNum}  \u00B7  ${date}`,W/2,289,{align:"center"});
+  doc.text(`InventApp  \u00B7  Factura N\u00B0 ${invoiceNum}  \u00B7  ${date}`,W/2,289,{align:"center"});
   doc.save(`Factura-${invoiceNum}.pdf`);
 };
 
@@ -451,7 +451,7 @@ const Sidebar = ({tab,setTab,db,sideOpen,setSideOpen,isMobile,theme,setTheme}) =
       <div style={{padding:"20px 18px 16px",borderBottom:"1px solid #1e293b"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <div style={{fontSize:17,fontWeight:900,color:"#fff",letterSpacing:-0.5}}>📦 InvenPro</div>
+            <div style={{fontSize:17,fontWeight:900,color:"#fff",letterSpacing:-0.5}}>📦 InventApp</div>
             <div style={{fontSize:10,color:"var(--text4)",marginTop:1}}>{db.settings.businessName}</div>
           </div>
           {isMobile&&<button onClick={()=>setSideOpen(false)} style={{background:"none",border:"none",color:"var(--text4)",fontSize:20,cursor:"pointer"}}>×</button>}
@@ -1216,7 +1216,7 @@ export default function App() {
   if (loading) return (
     <div style={{minHeight:"100vh",background:"var(--bg4)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
       <div style={{fontSize:48}}>📦</div>
-      <div style={{fontSize:20,fontWeight:800,color:"var(--text)"}}>InvenPro</div>
+      <div style={{fontSize:20,fontWeight:800,color:"var(--text)"}}>InventApp</div>
       <div style={{fontSize:14,color:"var(--text4)"}}>Conectando con la base de datos…</div>
       <div style={{width:40,height:40,border:"4px solid #e2e8f0",borderTop:"4px solid #6366f1",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
@@ -1283,7 +1283,7 @@ export default function App() {
             backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)",
           }}>
             <div>
-              <div style={{fontWeight:700,fontSize:16,color:"var(--text)",letterSpacing:-0.3}}>📦 InvenPro</div>
+              <div style={{fontWeight:700,fontSize:16,color:"var(--text)",letterSpacing:-0.3}}>📦 InventApp</div>
               <div style={{fontSize:11,color:"var(--text4)"}}>{tab}</div>
             </div>
             <button onClick={()=>setSideOpen(true)} style={{
@@ -1610,45 +1610,119 @@ export default function App() {
           <>
             <div style={s.header}><h1 style={s.title}>📈 Reportes</h1></div>
             {(() => {
-              const salidas=db.movements.filter(m=>m.type==="salida");
-              const topMap={};
-              salidas.forEach(m=>{ if(!topMap[m.productId])topMap[m.productId]={name:m.productName,qty:0,val:0}; const p=db.products.find(x=>x.id===m.productId); topMap[m.productId].qty+=m.qty; topMap[m.productId].val+=p?p.price*m.qty:0; });
-              const top=Object.values(topMap).sort((a,b)=>b.qty-a.qty).slice(0,5);
-              const maxQ=top[0]?.qty||1;
-              const totalSales=salidas.reduce((s,m)=>{const p=db.products.find(x=>x.id===m.productId);return s+(p?p.price*m.qty:0);},0);
-              const sinMov=db.products.filter(p=>!salidas.some(m=>m.productId===p.id));
+              const salidas = db.movements.filter(m => m.type === "salida");
+
+              // Acumulados por producto
+              const topMap = {};
+              salidas.forEach(m => {
+                const p = db.products.find(x => x.id === m.productId);
+                if (!topMap[m.productId]) topMap[m.productId] = { name:m.productName, qty:0, val:0, profit:0 };
+                topMap[m.productId].qty    += m.qty;
+                topMap[m.productId].val    += p ? p.price * m.qty : 0;
+                topMap[m.productId].profit += p ? (p.price - p.cost) * m.qty : 0;
+              });
+
+              const top      = Object.values(topMap).sort((a,b) => b.qty - a.qty).slice(0, 5);
+              const maxQ     = top[0]?.qty || 1;
+
+              // KPIs globales
+              const totalSales  = salidas.reduce((s, m) => { const p = db.products.find(x => x.id === m.productId); return s + (p ? p.price * m.qty : 0); }, 0);
+              const totalCost   = salidas.reduce((s, m) => { const p = db.products.find(x => x.id === m.productId); return s + (p ? p.cost  * m.qty : 0); }, 0);
+              const totalProfit = totalSales - totalCost;
+              const margin      = totalSales > 0 ? ((totalProfit / totalSales) * 100).toFixed(1) : 0;
+
+              const sinMov = db.products.filter(p => !salidas.some(m => m.productId === p.id));
+
               return <>
-                <div style={s.kpiGrid(3)}>
+                {/* ── KPIs ── */}
+                <div style={s.kpiGrid(isMobile ? 2 : 4)}>
                   {[
-                    {label:"Total movimientos",val:db.movements.length,color:"#6366f1",icon:"🔄"},
-                    {label:"Salidas registradas",val:salidas.length,color:"#b91c1c",icon:"📤"},
-                    {label:"Ventas acumuladas",val:formatCOP(totalSales),color:"#10b981",icon:"💰"},
-                  ].map(k=><div key={k.label} style={s.kpiCard(k.color)}><div style={{fontSize:18,marginBottom:5}}>{k.icon}</div><div style={s.kpiVal}>{k.val}</div><div style={s.kpiLabel}>{k.label}</div></div>)}
+                    { label:"Total movimientos",   val:db.movements.length,     color:"#6366f1", icon:"🔄" },
+                    { label:"Salidas registradas",  val:salidas.length,          color:"#b91c1c", icon:"📤" },
+                    { label:"Ventas acumuladas",    val:formatCOP(totalSales),   color:"#3b82f6", icon:"💰" },
+                    { label:"Ganancia real",        val:formatCOP(totalProfit),  color:"#34c759", icon:"📊" },
+                  ].map(k => (
+                    <div key={k.label} style={s.kpiCard(k.color)}>
+                      <div style={{fontSize:18,marginBottom:5}}>{k.icon}</div>
+                      <div style={s.kpiVal}>{k.val}</div>
+                      <div style={s.kpiLabel}>{k.label}</div>
+                    </div>
+                  ))}
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14}}>
+
+                {/* ── Tarjeta de ganancia detallada ── */}
+                <div style={{...s.card, marginBottom:14}}>
+                  <div style={{padding:"14px 18px 12px", borderBottom:"1px solid var(--bg4)", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8}}>
+                    <span style={{fontWeight:700, fontSize:14}}>📊 Desglose de ganancia</span>
+                    <span style={{fontSize:12, color:"var(--text4)", background:"var(--bg3)", padding:"3px 10px", borderRadius:99, fontWeight:600}}>Margen: {margin}%</span>
+                  </div>
+                  <div style={{padding:"14px 18px", display:"grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap:12}}>
+                    {/* Ingresos */}
+                    <div style={{background:"rgba(59,130,246,0.07)", borderRadius:14, padding:"14px 16px", border:"1px solid rgba(59,130,246,0.15)"}}>
+                      <div style={{fontSize:11, fontWeight:600, color:"#3b82f6", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6}}>💰 Ingresos brutos</div>
+                      <div style={{fontSize:22, fontWeight:700, color:"var(--text)", letterSpacing:-0.5}}>{formatCOP(totalSales)}</div>
+                      <div style={{fontSize:11, color:"var(--text4)", marginTop:3}}>Precio venta × unidades</div>
+                    </div>
+                    {/* Costos */}
+                    <div style={{background:"rgba(255,59,48,0.07)", borderRadius:14, padding:"14px 16px", border:"1px solid rgba(255,59,48,0.15)"}}>
+                      <div style={{fontSize:11, fontWeight:600, color:"var(--destructive,#ff3b30)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6}}>📦 Costo de ventas</div>
+                      <div style={{fontSize:22, fontWeight:700, color:"var(--text)", letterSpacing:-0.5}}>{formatCOP(totalCost)}</div>
+                      <div style={{fontSize:11, color:"var(--text4)", marginTop:3}}>Costo producto × unidades</div>
+                    </div>
+                    {/* Ganancia */}
+                    <div style={{background:"rgba(52,199,89,0.07)", borderRadius:14, padding:"14px 16px", border:`1px solid ${totalProfit >= 0 ? "rgba(52,199,89,0.2)" : "rgba(255,59,48,0.2)"}`}}>
+                      <div style={{fontSize:11, fontWeight:600, color: totalProfit >= 0 ? "#34c759" : "var(--destructive,#ff3b30)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6}}>
+                        {totalProfit >= 0 ? "✅ Ganancia neta" : "❌ Pérdida neta"}
+                      </div>
+                      <div style={{fontSize:22, fontWeight:700, color: totalProfit >= 0 ? "#34c759" : "var(--destructive,#ff3b30)", letterSpacing:-0.5}}>{formatCOP(totalProfit)}</div>
+                      <div style={{fontSize:11, color:"var(--text4)", marginTop:3}}>Ingresos − Costos · {margin}% margen</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Top 5 + Baja rotación ── */}
+                <div style={{display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:14}}>
                   <div style={s.card}>
-                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)"}}>🏆 Top 5 más vendidos</div>
-                    {top.length===0?<EmptyState icon="📊" text="Sin ventas aún"/>:top.map((item,i)=>(
-                      <div key={i} style={{padding:"10px 16px",borderBottom:"1px solid var(--bg4)"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                            <span style={{background:i===0?"#fef9c3":"#f1f5f9",color:i===0?"#a16207":"#64748b",width:20,height:20,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800}}>{i+1}</span>
-                            <span style={{fontWeight:700,fontSize:13}}>{item.name}</span>
+                    <div style={{padding:"14px 16px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)"}}>🏆 Top 5 más vendidos</div>
+                    {top.length === 0 ? <EmptyState icon="📊" text="Sin ventas aún"/> : top.map((item, i) => (
+                      <div key={i} style={{padding:"10px 16px", borderBottom:"1px solid var(--bg4)"}}>
+                        <div style={{display:"flex", justifyContent:"space-between", marginBottom:5}}>
+                          <div style={{display:"flex", gap:8, alignItems:"center"}}>
+                            <span style={{background:i===0?"rgba(245,158,11,0.15)":"var(--bg3)", color:i===0?"#f59e0b":"var(--text4)", width:22, height:22, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:800}}>{i+1}</span>
+                            <span style={{fontWeight:700, fontSize:13, color:"var(--text)"}}>{item.name}</span>
                           </div>
-                          <div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:13,color:"#b91c1c"}}>{item.qty} und</div><div style={{fontSize:10,color:"var(--text4)"}}>{formatCOP(item.val)}</div></div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontWeight:700, fontSize:12, color:"var(--destructive,#ff3b30)"}}>{item.qty} und</div>
+                            <div style={{fontSize:10, color:"var(--text4)"}}>{formatCOP(item.val)}</div>
+                          </div>
                         </div>
-                        <div style={{height:5,background:"var(--bg4)",borderRadius:10}}><div style={{width:`${(item.qty/maxQ)*100}%`,height:"100%",background:i===0?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#6366f1,#8b5cf6)",borderRadius:10}}/></div>
+                        {/* Barra de cantidad */}
+                        <div style={{height:4, background:"var(--bg4)", borderRadius:10, marginBottom:4}}>
+                          <div style={{width:`${(item.qty/maxQ)*100}%`, height:"100%", background:i===0?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#6366f1,#8b5cf6)", borderRadius:10}}/>
+                        </div>
+                        {/* Ganancia por producto */}
+                        <div style={{display:"flex", justifyContent:"space-between", fontSize:11}}>
+                          <span style={{color:"var(--text4)"}}>Ganancia</span>
+                          <span style={{fontWeight:700, color: item.profit >= 0 ? "#34c759" : "var(--destructive,#ff3b30)"}}>{formatCOP(item.profit)}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
+
                   <div style={s.card}>
-                    <div style={{padding:"14px 16px 10px",fontWeight:800,fontSize:13,borderBottom:"1px solid var(--bg4)"}}>🐢 Baja rotación ({sinMov.length})</div>
-                    {sinMov.length===0?<EmptyState icon="✅" text="Todos los productos se han vendido"/>:sinMov.map(p=>(
-                      <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid var(--bg4)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <div><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:10,color:"var(--text3)"}}>{p.sku}</div></div>
-                        <Badge color={p.stock===0?"red":p.stock<=5?"yellow":"gray"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
-                      </div>
-                    ))}
+                    <div style={{padding:"14px 16px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)"}}>🐢 Baja rotación ({sinMov.length})</div>
+                    {sinMov.length === 0
+                      ? <EmptyState icon="✅" text="Todos los productos se han vendido"/>
+                      : sinMov.map(p => (
+                        <div key={p.id} style={{padding:"10px 16px", borderBottom:"1px solid var(--bg4)", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                          <div>
+                            <div style={{fontWeight:600, fontSize:13, color:"var(--text)"}}>{p.name}</div>
+                            <div style={{fontSize:10, color:"var(--text3)"}}>{p.sku} · Margen: {p.cost > 0 ? (((p.price-p.cost)/p.price)*100).toFixed(0) : "—"}%</div>
+                          </div>
+                          <Badge color={p.stock===0?"red":p.stock<=5?"yellow":"gray"}>{p.stock===0?"Agotado":`${p.stock} ${p.unit}`}</Badge>
+                        </div>
+                      ))
+                    }
                   </div>
                 </div>
               </>;
