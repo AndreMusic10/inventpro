@@ -263,7 +263,774 @@ const useNotifications = (db) => {
   return { permission, requestPermission, sendAlerts };
 };
 
-const ORDER_STATES = ["Pendiente", "En proceso", "Enviado", "Entregado"];
+// ═══════════════════════════════════════════════════════════════
+//  METAS — sistema completo de seguimiento de ventas
+// ═══════════════════════════════════════════════════════════════
+const GOALS_KEY = "inventapp_goals";
+
+const defaultGoals = {
+  daily:   { enabled: false, target: 0 },
+  weekly:  { enabled: false, target: 0 },
+  monthly: { enabled: false, target: 0 },
+};
+
+const loadGoals = () => {
+  try { return { ...defaultGoals, ...JSON.parse(localStorage.getItem(GOALS_KEY)||"{}") }; }
+  catch { return defaultGoals; }
+};
+
+const saveGoals = (g) => localStorage.setItem(GOALS_KEY, JSON.stringify(g));
+
+// Calcula ventas en un rango de fechas a partir de movimientos
+const calcSalesInRange = (movements, products, from, to) => {
+  return movements
+    .filter(m => {
+      if (m.type !== "salida") return false;
+      const note = m.note || "";
+      // Excluir cancelaciones
+      if (note.startsWith("Cancelación pedido #")) return false;
+      const d = new Date(m.date?.split(",")[0].split("/").reverse().join("-"));
+      return d >= from && d <= to;
+    })
+    .reduce((s, m) => {
+      const p = products.find(x => x.id === m.productId);
+      return s + (p ? p.price * m.qty : 0);
+    }, 0);
+};
+
+const getGoalStatus = (current, target) => {
+  if (!target || target <= 0) return null;
+  const pct = Math.min((current / target) * 100, 100);
+  if (pct >= 100)  return { label:"✅ Alcanzada",  color:"#34c759", bg:"rgba(52,199,89,.1)",  border:"rgba(52,199,89,.25)",  pct:100 };
+  if (pct >= 60)   return { label:"🟡 En proceso", color:"#ff9500", bg:"rgba(255,149,0,.1)",  border:"rgba(255,149,0,.25)",  pct };
+  return             { label:"🔴 Atrasada",   color:"#ff3b30", bg:"rgba(255,59,48,.1)",  border:"rgba(255,59,48,.25)",  pct };
+};
+
+const useGoals = (db, permission) => {
+  const [goals, setGoalsState] = useState(loadGoals);
+
+  const setGoals = (g) => { saveGoals(g); setGoalsState(g); };
+
+  // Calcular ventas actuales
+  const now   = new Date();
+  const todayStart   = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekStart    = new Date(todayStart); weekStart.setDate(todayStart.getDate() - todayStart.getDay());
+  const monthStart   = new Date(now.getFullYear(), now.getMonth(), 1);
+  const todayEnd     = new Date(todayStart); todayEnd.setDate(todayEnd.getDate()+1);
+  const weekEnd      = new Date(weekStart);  weekEnd.setDate(weekEnd.getDate()+7);
+  const monthEnd     = new Date(now.getFullYear(), now.getMonth()+1, 1);
+
+  const dailySales   = calcSalesInRange(db.movements, db.products, todayStart, todayEnd);
+  const weeklySales  = calcSalesInRange(db.movements, db.products, weekStart, weekEnd);
+  const monthlySales = calcSalesInRange(db.movements, db.products, monthStart, monthEnd);
+
+  const dailyStatus   = goals.daily.enabled   ? getGoalStatus(dailySales,   goals.daily.target)   : null;
+  const weeklyStatus  = goals.weekly.enabled  ? getGoalStatus(weeklySales,  goals.weekly.target)  : null;
+  const monthlyStatus = goals.monthly.enabled ? getGoalStatus(monthlySales, goals.monthly.target) : null;
+
+  // Notificaciones de metas
+  const GOALS_NOTIF_KEY = "inventapp_goals_notif";
+  const checkGoalNotifications = useCallback(() => {
+    if (permission !== "granted") return;
+    if (!("serviceWorker" in navigator)) return;
+
+    const last = JSON.parse(localStorage.getItem(GOALS_NOTIF_KEY) || "{}");
+    const nowTs = Date.now();
+
+    const checks = [
+      { key:"daily",   status:dailyStatus,   sales:dailySales,   target:goals.daily.target,   label:"diaria" },
+      { key:"weekly",  status:weeklyStatus,  sales:weeklySales,  target:goals.weekly.target,  label:"semanal" },
+      { key:"monthly", status:monthlyStatus, sales:monthlySales, target:goals.monthly.target, label:"mensual" },
+    ];
+
+    const notifications = [];
+    checks.forEach(({ key, status, sales, target, label }) => {
+      if (!status) return;
+      const lastNotif = last[key] || 0;
+      // Notificar máximo cada hora
+      if (nowTs - lastNotif < 60 * 60 * 1000) return;
+
+      if (status.pct >= 100) {
+        notifications.push({
+          title: `🎉 ¡Meta ${label} alcanzada!`,
+          body:  `¡Felicitaciones! Cumpliste tu meta ${label} de ${new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(target)}`,
+          tag:   `goal-${key}-achieved`,
+          type:  "achieved",
+        });
+      } else if (status.pct < 60) {
+        notifications.push({
+          title: `⚠️ Meta ${label} en riesgo`,
+          body:  `¡Cuidado! Tu meta ${label} no se está cumpliendo. Llevas ${status.pct.toFixed(0)}%. ¡Esfuérzate más!`,
+          tag:   `goal-${key}-warning`,
+          type:  "warning",
+        });
+      }
+      last[key] = nowTs;
+    });
+
+    if (notifications.length > 0) {
+      localStorage.setItem(GOALS_NOTIF_KEY, JSON.stringify(last));
+      navigator.serviceWorker.ready.then(reg => {
+        reg.active?.postMessage({ type:"GOAL_ALERTS", payload: notifications });
+      });
+    }
+  }, [permission, dailyStatus, weeklyStatus, monthlyStatus]);
+
+  // Checar notificaciones cada 30 minutos
+  useEffect(() => {
+    if (permission !== "granted") return;
+    checkGoalNotifications();
+    const iv = setInterval(checkGoalNotifications, 30 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [checkGoalNotifications, permission]);
+
+  return {
+    goals, setGoals,
+    dailySales, weeklySales, monthlySales,
+    dailyStatus, weeklyStatus, monthlyStatus,
+  };
+};
+
+// ── GoalsTab — Metas + Gamificación integrada ─────────────────
+const GoalsTab = ({ db, s, isMobile, goals, setGoals, dailySales, weeklySales, monthlySales, dailyStatus, weeklyStatus, monthlyStatus, permission, onRequestNotif, game, level, nextLevel, pctToNext }) => {
+  const [editing,    setEditing]    = useState(false);
+  const [draft,      setDraft]      = useState(goals);
+  const [activeView, setActiveView] = useState("progreso"); // "progreso" | "logros"
+
+  useEffect(() => setDraft(goals), [goals]);
+  const setD = (period, key, val) => setDraft(d => ({ ...d, [period]: { ...d[period], [key]: val } }));
+
+  const periods = [
+    { key:"daily",   label:"Diaria",   icon:"📅", sales:dailySales,   status:dailyStatus,   desc:"Hoy" },
+    { key:"weekly",  label:"Semanal",  icon:"📆", sales:weeklySales,  status:weeklyStatus,  desc:"Esta semana" },
+    { key:"monthly", label:"Mensual",  icon:"🗓️", sales:monthlySales, status:monthlyStatus, desc:"Este mes" },
+  ];
+  const anyEnabled  = goals.daily.enabled || goals.weekly.enabled || goals.monthly.enabled;
+  const unlocked    = ACHIEVEMENTS.filter(a =>  game.unlocked.includes(a.id));
+  const locked      = ACHIEVEMENTS.filter(a => !game.unlocked.includes(a.id));
+  const businessName = db.settings?.businessName || "Mi Negocio";
+
+  return (
+    <>
+      <div style={s.header}>
+        <h1 style={s.title}>🎯 Metas</h1>
+        <Btn onClick={()=>setEditing(e=>!e)} variant={editing?"secondary":"primary"} size="sm">
+          {editing ? "✕ Cancelar" : "⚙️ Configurar"}
+        </Btn>
+      </div>
+
+      {/* ══ TARJETA DE PERFIL COMPARTIBLE ══════════════════════════ */}
+      <div style={{
+        borderRadius:24, marginBottom:16, overflow:"hidden",
+        background:`linear-gradient(135deg, ${level.color}22, ${level.color}08)`,
+        border:`1.5px solid ${level.color}44`,
+        boxShadow:`0 4px 24px ${level.color}18`,
+      }}>
+        {/* Fondo decorativo */}
+        <div style={{position:"relative", padding:"20px 20px 16px", overflow:"hidden"}}>
+          {/* Círculos decorativos */}
+          <div style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:"50%",background:`${level.color}10`}}/>
+          <div style={{position:"absolute",top:10,right:50,width:60,height:60,borderRadius:"50%",background:`${level.color}08`}}/>
+
+          {/* Fila principal */}
+          <div style={{display:"flex", gap:14, alignItems:"center", position:"relative"}}>
+            {/* Avatar nivel */}
+            <div style={{
+              width:64, height:64, borderRadius:20,
+              background:`linear-gradient(135deg,${level.color},${level.color}99)`,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              fontSize:32, flexShrink:0,
+              boxShadow:`0 4px 12px ${level.color}40`,
+            }}>
+              {level.icon}
+            </div>
+            <div style={{flex:1, minWidth:0}}>
+              <div style={{fontSize:11, fontWeight:600, color:level.color, textTransform:"uppercase", letterSpacing:.8, marginBottom:2}}>
+                {businessName}
+              </div>
+              <div style={{fontSize:22, fontWeight:800, color:"var(--text)", letterSpacing:-.5, lineHeight:1.1}}>
+                Nivel {level.name}
+              </div>
+              <div style={{fontSize:12, color:"var(--text4)", marginTop:2}}>
+                ⭐ {game.points.toLocaleString()} puntos · 🏅 {unlocked.length} logros
+              </div>
+            </div>
+            {/* Racha */}
+            {game.streak > 0 && (
+              <div style={{
+                background:"rgba(255,149,0,.12)", border:"1.5px solid rgba(255,149,0,.3)",
+                borderRadius:14, padding:"8px 12px", textAlign:"center", flexShrink:0,
+              }}>
+                <div style={{fontSize:20}}>🔥</div>
+                <div style={{fontWeight:800, fontSize:18, color:"#ff9500", lineHeight:1}}>{game.streak}</div>
+                <div style={{fontSize:9, color:"#ff9500", fontWeight:600}}>días</div>
+              </div>
+            )}
+          </div>
+
+          {/* Barra de nivel */}
+          {nextLevel && (
+            <div style={{marginTop:14}}>
+              <div style={{display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:4}}>
+                <span style={{color:"var(--text4)"}}>Progreso a <strong style={{color:level.color}}>{level.next}</strong></span>
+                <span style={{fontWeight:700, color:level.color}}>{pctToNext.toFixed(0)}%</span>
+              </div>
+              <div style={{height:6, background:"rgba(0,0,0,.08)", borderRadius:99, overflow:"hidden"}}>
+                <div style={{height:"100%", width:`${pctToNext}%`, background:`linear-gradient(90deg,${level.color},${level.color}bb)`, borderRadius:99, transition:"width .6s ease"}}/>
+              </div>
+              <div style={{fontSize:10, color:"var(--text4)", marginTop:3}}>
+                Faltan {Math.max(0, (nextLevel?.min||0) - game.points).toLocaleString()} pts
+              </div>
+            </div>
+          )}
+          {!nextLevel && (
+            <div style={{marginTop:12, textAlign:"center", fontSize:13, color:level.color, fontWeight:700}}>
+              💎 ¡Nivel máximo! Eres un maestro del negocio
+            </div>
+          )}
+
+          {/* Logros destacados (últimos 5 desbloqueados) */}
+          {unlocked.length > 0 && (
+            <div style={{display:"flex", gap:6, marginTop:14, flexWrap:"wrap"}}>
+              {unlocked.slice(-5).map(a => (
+                <div key={a.id} title={a.name} style={{
+                  width:34, height:34, borderRadius:10,
+                  background:`${level.color}18`, border:`1px solid ${level.color}30`,
+                  display:"flex", alignItems:"center", justifyContent:"center", fontSize:18,
+                }}>{a.icon}</div>
+              ))}
+              {unlocked.length > 5 && (
+                <div style={{
+                  width:34, height:34, borderRadius:10,
+                  background:"var(--bg3)", border:"1px solid var(--border)",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:11, fontWeight:700, color:"var(--text4)",
+                }}>+{unlocked.length-5}</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ══ TABS internas ══ */}
+      <div style={{display:"flex", gap:6, marginBottom:14}}>
+        {[
+          {key:"progreso", label:"📊 Progreso"},
+          {key:"logros",   label:`🏅 Logros (${unlocked.length}/${ACHIEVEMENTS.length})`},
+          {key:"racha",    label:"🔥 Racha"},
+        ].map(t=>(
+          <button key={t.key} onClick={()=>setActiveView(t.key)} style={{
+            flex:1, padding:"9px 8px", borderRadius:12, border:"none", cursor:"pointer",
+            background: activeView===t.key ? "linear-gradient(135deg,var(--accent),var(--accent2))" : "var(--bg2)",
+            color: activeView===t.key ? "#fff" : "var(--text4)",
+            fontWeight: activeView===t.key ? 700 : 500,
+            fontSize: isMobile ? 11 : 12,
+            boxShadow: activeView===t.key ? "0 2px 8px rgba(99,102,241,.3)" : "none",
+            boxSizing:"border-box",
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ══ VISTA: PROGRESO ══════════════════════════════════════ */}
+      {activeView==="progreso" && (
+        <>
+          {/* Config panel */}
+          {editing && (
+            <div style={{...s.card, marginBottom:14}}>
+              <div style={{padding:"16px 18px"}}>
+                <div style={{fontWeight:700, fontSize:13, color:"var(--text)", marginBottom:14}}>⚙️ Configurar metas</div>
+                {periods.map(p => (
+                  <div key={p.key} style={{marginBottom:12, padding:"12px 14px", background:"var(--bg3)", borderRadius:12, border:"1.5px solid var(--border)"}}>
+                    <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:draft[p.key].enabled?10:0}}>
+                      <div style={{display:"flex", alignItems:"center", gap:8}}>
+                        <span style={{fontSize:18}}>{p.icon}</span>
+                        <div>
+                          <div style={{fontWeight:700, fontSize:13, color:"var(--text)"}}>Meta {p.label}</div>
+                          <div style={{fontSize:11, color:"var(--text4)"}}>{p.desc}</div>
+                        </div>
+                      </div>
+                      <div onClick={()=>setD(p.key,"enabled",!draft[p.key].enabled)}
+                        style={{width:44,height:26,borderRadius:99,background:draft[p.key].enabled?"#34c759":"var(--border)",cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
+                        <div style={{position:"absolute",top:3,left:draft[p.key].enabled?21:3,width:20,height:20,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}/>
+                      </div>
+                    </div>
+                    {draft[p.key].enabled && (
+                      <div>
+                        <label style={{display:"block",fontSize:11,fontWeight:600,color:"var(--text4)",marginBottom:5}}>Monto objetivo (COP)</label>
+                        <input type="number" value={draft[p.key].target||""} onChange={e=>setD(p.key,"target",Number(e.target.value))} placeholder="Ej: 500000"
+                          style={{width:"100%",padding:"10px 12px",borderRadius:10,border:"1.5px solid var(--border)",fontSize:16,color:"var(--text)",background:"var(--bg2)",outline:"none",boxSizing:"border-box"}}/>
+                        {draft[p.key].target>0&&<div style={{fontSize:11,color:"var(--accent)",marginTop:3}}>{formatCOP(draft[p.key].target)}</div>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                  <Btn variant="secondary" onClick={()=>setEditing(false)}>Cancelar</Btn>
+                  <Btn onClick={()=>{setGoals(draft);setEditing(false);}}>💾 Guardar</Btn>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sin metas */}
+          {!anyEnabled && !editing && (
+            <div style={{...s.card, padding:"36px 20px", textAlign:"center"}}>
+              <div style={{fontSize:44, marginBottom:10, opacity:.35}}>🎯</div>
+              <div style={{fontWeight:700, fontSize:15, color:"var(--text)", marginBottom:6}}>Sin metas configuradas</div>
+              <div style={{fontSize:12, color:"var(--text4)", marginBottom:18, maxWidth:260, margin:"0 auto 18px"}}>Configura tus metas para ver tu progreso aquí</div>
+              <Btn onClick={()=>setEditing(true)}>⚙️ Configurar metas</Btn>
+            </div>
+          )}
+
+          {/* Tarjetas de progreso */}
+          {anyEnabled && !editing && periods.filter(p=>goals[p.key].enabled && goals[p.key].target>0).map(p=>{
+            const st = p.status;
+            const remaining = Math.max(0, goals[p.key].target - p.sales);
+            const over = p.sales > goals[p.key].target ? p.sales - goals[p.key].target : 0;
+            return (
+              <div key={p.key} style={{...s.card, border:`1.5px solid ${st?.border||"var(--border)"}`, marginBottom:12}}>
+                <div style={{padding:"16px 18px"}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
+                    <div style={{display:"flex", gap:10, alignItems:"center"}}>
+                      <div style={{width:38,height:38,borderRadius:11,background:st?.bg||"var(--bg3)",border:`2px solid ${st?.color||"var(--border)"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>
+                        {p.icon}
+                      </div>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:14,color:"var(--text)"}}>Meta {p.label}</div>
+                        <div style={{fontSize:11,color:"var(--text4)"}}>{p.desc}</div>
+                      </div>
+                    </div>
+                    <div style={{background:st?.bg,color:st?.color,padding:"4px 12px",borderRadius:99,fontSize:11,fontWeight:700,border:`1px solid ${st?.border||"var(--border)"}`}}>
+                      {st?.label||"Sin datos"}
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+                    <div style={{background:"var(--bg3)",borderRadius:10,padding:"9px 12px"}}>
+                      <div style={{fontSize:10,color:"var(--text4)",fontWeight:600,letterSpacing:.4,marginBottom:3}}>VENTAS ACTUALES</div>
+                      <div style={{fontSize:17,fontWeight:700,color:"var(--text)",letterSpacing:-.5}}>{formatCOP(p.sales)}</div>
+                    </div>
+                    <div style={{background:"var(--bg3)",borderRadius:10,padding:"9px 12px"}}>
+                      <div style={{fontSize:10,color:"var(--text4)",fontWeight:600,letterSpacing:.4,marginBottom:3}}>META OBJETIVO</div>
+                      <div style={{fontSize:17,fontWeight:700,color:"var(--text)",letterSpacing:-.5}}>{formatCOP(goals[p.key].target)}</div>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:5}}>
+                      <span style={{fontWeight:600,color:"var(--text)"}}>Progreso</span>
+                      <span style={{fontWeight:800,color:st?.color||"var(--accent)"}}>{(st?.pct||0).toFixed(1)}%</span>
+                    </div>
+                    <div style={{height:10,background:"var(--bg4)",borderRadius:99,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${st?.pct||0}%`,borderRadius:99,transition:"width .6s ease",
+                        background: st?.pct>=100?"linear-gradient(90deg,#34c759,#30d158)":st?.pct>=60?"linear-gradient(90deg,#ff9500,#fbbf24)":"linear-gradient(90deg,#ff3b30,#ff6b6b)",
+                        position:"relative"
+                      }}>
+                        {(st?.pct||0)>5&&<div style={{position:"absolute",top:0,right:0,width:"30%",height:"100%",background:"rgba(255,255,255,.25)",borderRadius:"0 99px 99px 0"}}/>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{padding:"9px 12px",borderRadius:10,background:"var(--bg3)",fontSize:12,color:"var(--text4)",lineHeight:1.5}}>
+                    {st?.pct>=100
+                      ? <span>🎉 <strong style={{color:"#34c759"}}>¡Felicitaciones!</strong> Superaste tu meta por {formatCOP(over)}</span>
+                      : st?.pct>=60
+                      ? <span>💪 ¡Vas bien! Te faltan <strong style={{color:"#ff9500"}}>{formatCOP(remaining)}</strong> para la meta</span>
+                      : <span>⚡ <strong style={{color:"#ff3b30"}}>¡Cuidado!</strong> Necesitas {formatCOP(remaining)} más. ¡Esfuérzate más!</span>
+                    }
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Notificaciones */}
+          {permission!=="granted" && anyEnabled && (
+            <div style={{...s.card,padding:"12px 16px",display:"flex",gap:10,alignItems:"center"}}>
+              <span style={{fontSize:20}}>🔔</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:12,color:"var(--text)"}}>Activa alertas de metas</div>
+                <div style={{fontSize:11,color:"var(--text4)"}}>Recibe notificaciones al alcanzar o atrasarte en tus metas</div>
+              </div>
+              <Btn size="sm" onClick={onRequestNotif}>Activar</Btn>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ══ VISTA: LOGROS ════════════════════════════════════════ */}
+      {activeView==="logros" && (
+        <>
+          {/* Puntos totales */}
+          <div style={{...s.card, background:`linear-gradient(135deg,var(--accent),var(--accent2))`, marginBottom:14}}>
+            <div style={{padding:"16px 18px", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:11, fontWeight:600, color:"rgba(255,255,255,.7)", textTransform:"uppercase", letterSpacing:.5}}>Puntos acumulados</div>
+                <div style={{fontSize:28, fontWeight:800, color:"#fff", letterSpacing:-.5}}>⭐ {game.points.toLocaleString()}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11, color:"rgba(255,255,255,.7)"}}>Logros</div>
+                <div style={{fontSize:22, fontWeight:800, color:"#fff"}}>{unlocked.length}/{ACHIEVEMENTS.length}</div>
+              </div>
+            </div>
+          </div>
+
+          {unlocked.length>0 && (
+            <div style={s.card}>
+              <div style={{padding:"12px 18px 8px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)", color:"#34c759"}}>
+                ✅ Desbloqueados ({unlocked.length})
+              </div>
+              {unlocked.map(a=>(
+                <div key={a.id} style={{padding:"11px 18px", borderBottom:".5px solid var(--bg4)", display:"flex", gap:12, alignItems:"center"}}>
+                  <div style={{width:42,height:42,borderRadius:12,background:"rgba(52,199,89,.1)",border:"1.5px solid rgba(52,199,89,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{a.icon}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{a.name}</div>
+                    <div style={{fontSize:11,color:"var(--text4)",marginTop:1}}>{a.desc}</div>
+                  </div>
+                  <div style={{background:"rgba(245,158,11,.1)",color:"#f59e0b",padding:"3px 9px",borderRadius:99,fontSize:11,fontWeight:700,flexShrink:0}}>+{a.pts}⭐</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {locked.length>0 && (
+            <div style={s.card}>
+              <div style={{padding:"12px 18px 8px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)", color:"var(--text4)"}}>
+                🔒 Por desbloquear ({locked.length})
+              </div>
+              {locked.map(a=>(
+                <div key={a.id} style={{padding:"11px 18px", borderBottom:".5px solid var(--bg4)", display:"flex", gap:12, alignItems:"center", opacity:.55}}>
+                  <div style={{width:42,height:42,borderRadius:12,background:"var(--bg3)",border:"1.5px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0,filter:"grayscale(1)"}}>{a.icon}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{a.name}</div>
+                    <div style={{fontSize:11,color:"var(--text4)",marginTop:1}}>{a.desc}</div>
+                  </div>
+                  <div style={{color:"var(--text3)",fontSize:11,flexShrink:0}}>+{a.pts}⭐</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ══ VISTA: RACHA ═════════════════════════════════════════ */}
+      {activeView==="racha" && (
+        <>
+          <div style={{...s.card, border:"1.5px solid rgba(255,149,0,.3)", background:"rgba(255,149,0,.04)", marginBottom:14}}>
+            <div style={{padding:"24px 20px", textAlign:"center"}}>
+              <div style={{fontSize:56, marginBottom:6}}>{game.streak>0?"🔥":"💤"}</div>
+              <div style={{fontSize:52, fontWeight:800, color:"#ff9500", letterSpacing:-2, lineHeight:1}}>{game.streak||0}</div>
+              <div style={{fontSize:14, color:"var(--text4)", marginBottom:12}}>días de racha activa</div>
+              <div style={{fontSize:12, color:game.streak>0?"#ff9500":"var(--text4)", fontWeight:game.streak>0?600:400}}>
+                {game.streak>0
+                  ? "¡Sigue así! Cumple tu meta diaria para continuar la racha 💪"
+                  : "Cumple tu meta diaria para iniciar una racha 🎯"}
+              </div>
+            </div>
+          </div>
+
+          <div style={s.card}>
+            <div style={{padding:"12px 18px 8px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)"}}>🏆 Metas de racha</div>
+            {[
+              {id:"streak_3",  days:3,  icon:"🔥",   pts:200,  color:"#ff9500"},
+              {id:"streak_7",  days:7,  icon:"🔥🔥", pts:500,  color:"#f59e0b"},
+              {id:"streak_30", days:30, icon:"🌋",   pts:2000, color:"#6366f1"},
+            ].map(r=>{
+              const done = game.unlocked.includes(r.id);
+              const pct  = Math.min((game.streak/r.days)*100,100);
+              return (
+                <div key={r.id} style={{padding:"13px 18px", borderBottom:".5px solid var(--bg4)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:done?0:8}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                      <span style={{fontSize:22,filter:done?"none":"grayscale(1)",opacity:done?1:.5}}>{r.icon}</span>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:13,color:done?r.color:"var(--text)"}}>{r.days} días seguidos</div>
+                        <div style={{fontSize:11,color:"var(--text4)"}}>+{r.pts} puntos</div>
+                      </div>
+                    </div>
+                    {done
+                      ? <span style={{color:"#34c759",fontSize:13,fontWeight:700}}>✅ Logrado</span>
+                      : <span style={{color:"var(--text4)",fontSize:12}}>{game.streak}/{r.days} días</span>
+                    }
+                  </div>
+                  {!done&&<div style={{height:5,background:"var(--bg4)",borderRadius:99,overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${pct}%`,background:r.color,borderRadius:99,transition:"width .4s"}}/>
+                  </div>}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  HISTORIAL MENSUAL
+// ═══════════════════════════════════════════════════════════════
+
+// Parsea la fecha del movimiento (formato "dd/mm/yyyy, hh:mm:ss")
+const parseMovDate = (dateStr) => {
+  if (!dateStr) return null;
+  try {
+    const [datePart] = dateStr.split(",");
+    const [d, m, y]  = datePart.trim().split("/");
+    return new Date(Number(y), Number(m) - 1, Number(d));
+  } catch { return null; }
+};
+
+const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+// Agrupa todos los movimientos por año-mes
+const groupByMonth = (movements, products) => {
+  const map = {};
+  movements.forEach(m => {
+    const d = parseMovDate(m.date);
+    if (!d) return;
+    const key   = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const label = `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+    if (!map[key]) map[key] = { key, label, year:d.getFullYear(), month:d.getMonth(), movements:[], entradas:0, salidas:0, ajustes:0, ingresos:0, costos:0, ganancia:0 };
+    map[key].movements.push(m);
+    const p = products.find(x => x.id === m.productId);
+    if (m.type === "entrada") map[key].entradas += m.qty;
+    if (m.type === "salida")  {
+      map[key].salidas  += m.qty;
+      map[key].ingresos += p ? p.price * m.qty : 0;
+      map[key].costos   += p ? p.cost  * m.qty : 0;
+    }
+    if (m.type === "ajuste")  map[key].ajustes  += m.qty;
+  });
+  // Calcular ganancia
+  Object.values(map).forEach(g => { g.ganancia = g.ingresos - g.costos; });
+  // Ordenar más reciente primero
+  return Object.values(map).sort((a,b) => b.key.localeCompare(a.key));
+};
+
+const HistorialTab = ({ db, s, isMobile }) => {
+  const months     = groupByMonth(db.movements, db.products);
+  const [selected, setSelected] = useState(months[0]?.key || null);
+  const [filter,   setFilter]   = useState("todos"); // todos | entrada | salida | ajuste
+
+  const current = months.find(m => m.key === selected);
+
+  // Movimientos del mes filtrados
+  const filtered = (current?.movements || []).filter(m => filter === "todos" || m.type === filter)
+    .sort((a,b) => {
+      const da = parseMovDate(a.date), db2 = parseMovDate(b.date);
+      return (db2||0) - (da||0);
+    });
+
+  // Agrupar por día dentro del mes
+  const byDay = {};
+  filtered.forEach(m => {
+    const d = parseMovDate(m.date);
+    if (!d) return;
+    const dk = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+    if (!byDay[dk]) byDay[dk] = [];
+    byDay[dk].push(m);
+  });
+  const days = Object.keys(byDay).sort((a,b)=>{
+    const [da,ma,ya] = a.split("/"); const [db2,mb,yb] = b.split("/");
+    return new Date(yb,mb-1,db2) - new Date(ya,ma-1,da);
+  });
+
+  if (months.length === 0) {
+    return (
+      <>
+        <div style={s.header}><h1 style={s.title}>🗂️ Historial mensual</h1></div>
+        <EmptyState icon="🗂️" text="Sin movimientos registrados aún. Los meses aparecerán aquí automáticamente." />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div style={s.header}><h1 style={s.title}>🗂️ Historial mensual</h1></div>
+
+      <div style={{display:"grid", gridTemplateColumns: isMobile ? "1fr" : "200px 1fr", gap:14, alignItems:"start"}}>
+
+        {/* ── Panel izquierdo: selector de mes ── */}
+        <div style={{...s.card, overflow:"visible"}}>
+          <div style={{padding:"12px 14px 8px", fontSize:11, fontWeight:700, color:"var(--text4)", textTransform:"uppercase", letterSpacing:.6, borderBottom:"1px solid var(--bg4)"}}>
+            📅 Meses registrados
+          </div>
+          {months.map(m => {
+            const isSelected = m.key === selected;
+            const hasProfit  = m.ganancia > 0;
+            return (
+              <div key={m.key} onClick={()=>setSelected(m.key)}
+                style={{
+                  padding:"11px 14px", cursor:"pointer",
+                  borderBottom:".5px solid var(--bg4)",
+                  background: isSelected ? "linear-gradient(135deg,var(--accent),var(--accent2))" : "transparent",
+                  borderLeft: isSelected ? "3px solid var(--accent)" : "3px solid transparent",
+                  transition:"background .15s",
+                }}>
+                <div style={{fontWeight:700, fontSize:13, color: isSelected ? "#fff" : "var(--text)"}}>{m.label}</div>
+                <div style={{fontSize:11, color: isSelected ? "rgba(255,255,255,.75)" : "var(--text4)", marginTop:2}}>
+                  {m.movements.length} movimientos
+                </div>
+                <div style={{fontSize:11, fontWeight:600, color: isSelected ? "rgba(255,255,255,.9)" : (hasProfit?"#34c759":"var(--text3)"), marginTop:1}}>
+                  {hasProfit ? "+" : ""}{formatCOP(m.ganancia)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Panel derecho: detalle del mes ── */}
+        {current ? (
+          <div>
+            {/* Header del mes */}
+            <div style={{...s.card, background:"linear-gradient(135deg,var(--accent),var(--accent2))", marginBottom:12}}>
+              <div style={{padding:"16px 18px"}}>
+                <div style={{fontSize:11, fontWeight:600, color:"rgba(255,255,255,.7)", textTransform:"uppercase", letterSpacing:.5, marginBottom:4}}>
+                  Resumen del mes
+                </div>
+                <div style={{fontSize:22, fontWeight:800, color:"#fff", letterSpacing:-.5, marginBottom:12}}>
+                  {current.label}
+                </div>
+                <div style={{display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8}}>
+                  {[
+                    {label:"Ingresos", val:formatCOP(current.ingresos), icon:"💰"},
+                    {label:"Ganancia", val:formatCOP(current.ganancia), icon:"📊"},
+                    {label:"Entradas", val:`+${current.entradas} und`,  icon:"📥"},
+                    {label:"Salidas",  val:`-${current.salidas} und`,   icon:"📤"},
+                  ].map(k=>(
+                    <div key={k.label} style={{background:"rgba(255,255,255,.12)", borderRadius:12, padding:"10px 12px"}}>
+                      <div style={{fontSize:10, color:"rgba(255,255,255,.65)", marginBottom:3}}>{k.icon} {k.label}</div>
+                      <div style={{fontSize:15, fontWeight:700, color:"#fff"}}>{k.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Filtro de tipo */}
+            <div style={{display:"flex", gap:6, marginBottom:12, flexWrap:"wrap"}}>
+              {[
+                {key:"todos",   label:"Todos",    count:current.movements.length},
+                {key:"salida",  label:"📤 Salidas",  count:current.movements.filter(m=>m.type==="salida").length},
+                {key:"entrada", label:"📥 Entradas", count:current.movements.filter(m=>m.type==="entrada").length},
+                {key:"ajuste",  label:"🔄 Ajustes",  count:current.movements.filter(m=>m.type==="ajuste").length},
+              ].map(f=>(
+                <button key={f.key} onClick={()=>setFilter(f.key)} style={{
+                  padding:"7px 13px", borderRadius:99, border:"none", cursor:"pointer",
+                  background: filter===f.key ? "var(--accent)" : "var(--bg2)",
+                  color: filter===f.key ? "#fff" : "var(--text4)",
+                  fontWeight: filter===f.key ? 700 : 500,
+                  fontSize:12,
+                  boxShadow: filter===f.key ? "0 2px 6px rgba(99,102,241,.3)" : "none",
+                }}>
+                  {f.label} <span style={{opacity:.7}}>({f.count})</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Movimientos agrupados por día */}
+            {days.length === 0
+              ? <EmptyState icon="📋" text="Sin movimientos de este tipo en el mes"/>
+              : days.map(day => (
+                <div key={day} style={{marginBottom:12}}>
+                  {/* Separador de día */}
+                  <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:8}}>
+                    <div style={{height:1, background:"var(--border)", flex:1}}/>
+                    <span style={{fontSize:11, fontWeight:700, color:"var(--text4)", background:"var(--bg)", padding:"2px 10px", borderRadius:99, border:"1px solid var(--border)", whiteSpace:"nowrap"}}>
+                      📅 {day}
+                    </span>
+                    <div style={{height:1, background:"var(--border)", flex:1}}/>
+                  </div>
+
+                  {/* Movimientos del día */}
+                  {byDay[day].map(m => {
+                    const prod = db.products.find(p=>p.id===m.productId);
+                    const valor = prod && m.type==="salida" ? prod.price*m.qty : null;
+                    const ganancia = prod && m.type==="salida" ? (prod.price-prod.cost)*m.qty : null;
+                    return (
+                      <div key={m.id} style={{...s.card, padding:"11px 14px", marginBottom:6, display:"flex", gap:12, alignItems:"center"}}>
+                        {/* Imagen/ícono */}
+                        <div style={{width:40,height:40,borderRadius:10,border:"1.5px solid var(--border)",background:"var(--bg3)",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,position:"relative"}}>
+                          {prod?.image
+                            ? <img src={prod.image} alt={prod.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                            : <span>{m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}</span>
+                          }
+                          {prod?.image && (
+                            <span style={{position:"absolute",bottom:0,right:0,fontSize:9,background:"rgba(0,0,0,.55)",borderRadius:"3px 0 8px 0",padding:"1px 2px"}}>
+                              {m.type==="entrada"?"📥":m.type==="salida"?"📤":"🔄"}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Info */}
+                        <div style={{flex:1, minWidth:0}}>
+                          <div style={{fontWeight:700, fontSize:13, color:"var(--text)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{m.productName}</div>
+                          {m.note && <div style={{fontSize:10, color:"var(--text4)", marginTop:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{m.note}</div>}
+                          <div style={{fontSize:10, color:"var(--text3)", marginTop:1}}>{m.date}</div>
+                        </div>
+
+                        {/* Valores */}
+                        <div style={{textAlign:"right", flexShrink:0}}>
+                          <Badge color={m.type==="entrada"?"green":m.type==="salida"?"red":"blue"}>
+                            {m.type==="entrada"?"+":m.type==="salida"?"-":"="}{m.qty}
+                          </Badge>
+                          {valor !== null && (
+                            <div style={{fontSize:12, fontWeight:700, color:"var(--text)", marginTop:3}}>{formatCOP(valor)}</div>
+                          )}
+                          {ganancia !== null && (
+                            <div style={{fontSize:10, color:"#34c759", fontWeight:600}}>+{formatCOP(ganancia)}</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Subtotal del día */}
+                  {filter !== "entrada" && filter !== "ajuste" && (()=>{
+                    const daySales = byDay[day].filter(m=>m.type==="salida").reduce((s,m)=>{
+                      const p=db.products.find(x=>x.id===m.productId); return s+(p?p.price*m.qty:0);
+                    },0);
+                    const dayProfit = byDay[day].filter(m=>m.type==="salida").reduce((s,m)=>{
+                      const p=db.products.find(x=>x.id===m.productId); return s+(p?(p.price-p.cost)*m.qty:0);
+                    },0);
+                    return daySales > 0 ? (
+                      <div style={{display:"flex",justifyContent:"flex-end",gap:16,padding:"6px 14px",fontSize:11,color:"var(--text4)"}}>
+                        <span>Ventas del día: <strong style={{color:"var(--text)"}}>{formatCOP(daySales)}</strong></span>
+                        <span>Ganancia: <strong style={{color:"#34c759"}}>{formatCOP(dayProfit)}</strong></span>
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+              ))
+            }
+
+            {/* Total del mes al final */}
+            {current.ingresos > 0 && (
+              <div style={{...s.card, background:"var(--bg3)", border:"1px solid var(--border)", padding:"14px 18px"}}>
+                <div style={{fontSize:11, fontWeight:700, color:"var(--text4)", textTransform:"uppercase", letterSpacing:.5, marginBottom:10}}>
+                  Resumen total — {current.label}
+                </div>
+                <div style={{display:"flex", justifyContent:"space-between", marginBottom:6, fontSize:13}}>
+                  <span style={{color:"var(--text4)"}}>💰 Ingresos brutos</span>
+                  <span style={{fontWeight:700, color:"var(--text)"}}>{formatCOP(current.ingresos)}</span>
+                </div>
+                <div style={{display:"flex", justifyContent:"space-between", marginBottom:6, fontSize:13}}>
+                  <span style={{color:"var(--text4)"}}>📦 Costo de ventas</span>
+                  <span style={{fontWeight:700, color:"var(--text)"}}>{formatCOP(current.costos)}</span>
+                </div>
+                <div style={{height:1, background:"var(--border)", margin:"8px 0"}}/>
+                <div style={{display:"flex", justifyContent:"space-between", fontSize:15}}>
+                  <span style={{fontWeight:700, color:"var(--text)"}}>📊 Ganancia neta</span>
+                  <span style={{fontWeight:800, color: current.ganancia>=0?"#34c759":"var(--destructive)"}}>{formatCOP(current.ganancia)}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <EmptyState icon="📅" text="Selecciona un mes para ver el detalle"/>
+        )}
+      </div>
+    </>
+  );
+};
+
 const ORDER_STATE_COLORS = {
   "Pendiente":   { bg:"#fef9c3", text:"#a16207", dot:"#f59e0b" },
   "En proceso":  { bg:"#dbeafe", text:"#1d4ed8", dot:"#3b82f6" },
@@ -272,16 +1039,386 @@ const ORDER_STATE_COLORS = {
   "Cancelado":   { bg:"#fee2e2", text:"#b91c1c", dot:"#ef4444" },
 };
 
+// ═══════════════════════════════════════════════════════════════
+//  GAMIFICACIÓN — Puntos, niveles, logros y racha
+// ═══════════════════════════════════════════════════════════════
+const GAME_KEY = "inventapp_game";
+
+// ── Niveles ──────────────────────────────────────────────────
+const LEVELS = [
+  { name:"Bronce",   min:0,     max:999,    icon:"🥉", color:"#cd7f32", bg:"rgba(205,127,50,.1)",  next:"Plata" },
+  { name:"Plata",    min:1000,  max:4999,   icon:"🥈", color:"#94a3b8", bg:"rgba(148,163,184,.1)", next:"Oro" },
+  { name:"Oro",      min:5000,  max:14999,  icon:"🥇", color:"#f59e0b", bg:"rgba(245,158,11,.1)",  next:"Diamante" },
+  { name:"Diamante", min:15000, max:Infinity, icon:"💎", color:"#6366f1", bg:"rgba(99,102,241,.1)", next:null },
+];
+
+const getLevel = (pts) => LEVELS.find(l => pts >= l.min && pts <= l.max) || LEVELS[0];
+
+// ── Logros disponibles ────────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:"first_sale",      icon:"🌟", name:"Primera venta",         desc:"Registra tu primera venta",                         pts:50 },
+  { id:"sales_10",        icon:"🔟", name:"10 ventas",             desc:"Acumula 10 movimientos de salida",                  pts:100 },
+  { id:"sales_50",        icon:"💪", name:"50 ventas",             desc:"Acumula 50 movimientos de salida",                  pts:300 },
+  { id:"sales_100",       icon:"🚀", name:"Centurión",             desc:"Acumula 100 ventas — ¡eres imparable!",             pts:500 },
+  { id:"daily_goal",      icon:"📅", name:"Meta diaria",           desc:"Cumple tu meta de ventas del día",                  pts:150 },
+  { id:"weekly_goal",     icon:"📆", name:"Meta semanal",          desc:"Cumple tu meta de ventas de la semana",             pts:300 },
+  { id:"monthly_goal",    icon:"🗓️", name:"Meta mensual",          desc:"Cumple tu meta de ventas del mes",                  pts:600 },
+  { id:"streak_3",        icon:"🔥", name:"Racha de 3 días",       desc:"Cumple tu meta diaria 3 días seguidos",             pts:200 },
+  { id:"streak_7",        icon:"🔥🔥", name:"Racha de 7 días",     desc:"Cumple tu meta diaria 7 días seguidos — ¡épico!",   pts:500 },
+  { id:"streak_30",       icon:"🌋", name:"Racha de 30 días",      desc:"30 días seguidos cumpliendo meta diaria",           pts:2000 },
+  { id:"million",         icon:"💰", name:"Primer millón",         desc:"Supera $1.000.000 en ventas acumuladas",            pts:400 },
+  { id:"five_million",    icon:"💎", name:"5 millones",            desc:"Supera $5.000.000 en ventas acumuladas",            pts:800 },
+  { id:"products_5",      icon:"📦", name:"Catálogo básico",       desc:"Agrega 5 productos al inventario",                  pts:75 },
+  { id:"clients_5",       icon:"👥", name:"Base de clientes",      desc:"Registra 5 clientes",                               pts:100 },
+  { id:"no_stock",        icon:"⚠️", name:"Siempre abastecido",    desc:"Mantén cero productos agotados por un día",         pts:150 },
+];
+
+// ── Carga y guarda estado del juego ──────────────────────────
+const loadGame = () => {
+  try {
+    const raw = localStorage.getItem(GAME_KEY);
+    return raw ? JSON.parse(raw) : {
+      points: 0,
+      unlocked: [],
+      streak: 0,
+      lastStreakDate: null,
+      totalSalesEver: 0,
+      newAchievements: [], // para mostrar notificación
+    };
+  } catch { return { points:0, unlocked:[], streak:0, lastStreakDate:null, totalSalesEver:0, newAchievements:[] }; }
+};
+const saveGame = (g) => localStorage.setItem(GAME_KEY, JSON.stringify(g));
+
+// ── Hook principal ────────────────────────────────────────────
+const useGamification = (db, dailyStatus, goals, permission) => {
+  const [game, setGameState] = useState(loadGame);
+
+  const setGame = (g) => { saveGame(g); setGameState(g); };
+
+  // Evaluar logros automáticamente cuando cambian los datos
+  useEffect(() => {
+    if (db.products.length === 0 && db.movements.length === 0) return;
+
+    const salidas = db.movements.filter(m => m.type === "salida");
+    const totalSales = salidas.reduce((s,m) => {
+      const p = db.products.find(x=>x.id===m.productId);
+      return s + (p ? p.price*m.qty : 0);
+    }, 0);
+
+    const g = loadGame();
+    let changed = false;
+    const newUnlocked = [];
+
+    const unlock = (id) => {
+      if (!g.unlocked.includes(id)) {
+        const ach = ACHIEVEMENTS.find(a=>a.id===id);
+        if (ach) {
+          g.unlocked.push(id);
+          g.points += ach.pts;
+          g.newAchievements = [...(g.newAchievements||[]), id];
+          newUnlocked.push(ach);
+          changed = true;
+        }
+      }
+    };
+
+    // Evaluar cada logro
+    if (salidas.length >= 1)   unlock("first_sale");
+    if (salidas.length >= 10)  unlock("sales_10");
+    if (salidas.length >= 50)  unlock("sales_50");
+    if (salidas.length >= 100) unlock("sales_100");
+    if (totalSales >= 1_000_000)   unlock("million");
+    if (totalSales >= 5_000_000)   unlock("five_million");
+    if (db.products.length >= 5)   unlock("products_5");
+    if (db.clients.length >= 5)    unlock("clients_5");
+    const agotados = db.products.filter(p=>p.stock===0).length;
+    if (agotados === 0 && db.products.length > 0) unlock("no_stock");
+
+    // Logros de metas
+    if (dailyStatus?.pct >= 100)   unlock("daily_goal");
+    if (goals?.weekly?.enabled  && db.movements.length > 0) {
+      // weekly/monthly se evalúan si el status está disponible
+    }
+
+    // Racha de días
+    const today = new Date().toDateString();
+    if (dailyStatus?.pct >= 100 && g.lastStreakDate !== today) {
+      const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+      const wasYesterday = g.lastStreakDate === yesterday.toDateString();
+      g.streak = wasYesterday ? (g.streak||0)+1 : 1;
+      g.lastStreakDate = today;
+      changed = true;
+      if (g.streak >= 3)  unlock("streak_3");
+      if (g.streak >= 7)  unlock("streak_7");
+      if (g.streak >= 30) unlock("streak_30");
+    }
+
+    if (changed) {
+      saveGame(g);
+      setGameState({...g});
+      // Notificación push de logro desbloqueado
+      if (newUnlocked.length > 0 && permission === "granted" && "serviceWorker" in navigator) {
+        navigator.serviceWorker.ready.then(reg => {
+          newUnlocked.forEach(ach => {
+            reg.active?.postMessage({
+              type: "ACHIEVEMENT_UNLOCKED",
+              payload: { title:`${ach.icon} ¡Logro desbloqueado!`, body:`${ach.name} — +${ach.pts} puntos`, tag:`ach-${ach.id}` }
+            });
+          });
+        });
+      }
+    }
+  }, [db.movements.length, db.products.length, db.clients.length, dailyStatus?.pct]);
+
+  const clearNew = () => {
+    const g = loadGame();
+    g.newAchievements = [];
+    saveGame(g);
+    setGameState(prev => ({...prev, newAchievements:[]}));
+  };
+
+  const level     = getLevel(game.points);
+  const nextLevel = LEVELS.find(l => l.min > level.min);
+  const pctToNext = nextLevel
+    ? Math.min(((game.points - level.min) / (nextLevel.min - level.min)) * 100, 100)
+    : 100;
+
+  return { game, level, nextLevel, pctToNext, clearNew };
+};
+
+// ── GamificationTab — pantalla de gamificación ───────────────
+const GamificationTab = ({ game, level, nextLevel, pctToNext, clearNew, s, isMobile }) => {
+  const [activeSection, setActiveSection] = useState("resumen"); // resumen | logros | racha
+  const unlocked   = ACHIEVEMENTS.filter(a =>  game.unlocked.includes(a.id));
+  const locked     = ACHIEVEMENTS.filter(a => !game.unlocked.includes(a.id));
+
+  // Limpiar nuevos logros al entrar
+  useEffect(() => { clearNew(); }, []);
+
+  return (
+    <>
+      <div style={s.header}>
+        <h1 style={s.title}>🏆 Gamificación</h1>
+        <div style={{background:level.bg, border:`1.5px solid ${level.color}`, borderRadius:99, padding:"5px 14px", display:"flex", alignItems:"center", gap:6}}>
+          <span style={{fontSize:18}}>{level.icon}</span>
+          <span style={{fontWeight:700, fontSize:13, color:level.color}}>{level.name}</span>
+        </div>
+      </div>
+
+      {/* Tabs internas */}
+      <div style={{display:"flex", gap:6, marginBottom:16}}>
+        {[
+          {key:"resumen", label:"📊 Resumen"},
+          {key:"logros",  label:`🏅 Logros (${unlocked.length}/${ACHIEVEMENTS.length})`},
+          {key:"racha",   label:"🔥 Racha"},
+        ].map(t=>(
+          <button key={t.key} onClick={()=>setActiveSection(t.key)} style={{
+            padding:"8px 14px", borderRadius:12, border:"none", cursor:"pointer",
+            background: activeSection===t.key ? "linear-gradient(135deg,var(--accent),var(--accent2))" : "var(--bg2)",
+            color: activeSection===t.key ? "#fff" : "var(--text4)",
+            fontWeight: activeSection===t.key ? 700 : 500,
+            fontSize:12, boxShadow: activeSection===t.key ? "0 2px 8px rgba(99,102,241,.3)" : "none",
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ── RESUMEN ── */}
+      {activeSection==="resumen" && (
+        <>
+          {/* Nivel actual */}
+          <div style={{...s.card, background:level.bg, border:`1.5px solid ${level.color}`, marginBottom:14}}>
+            <div style={{padding:"20px 20px"}}>
+              <div style={{display:"flex", alignItems:"center", gap:16, marginBottom:16}}>
+                <div style={{fontSize:54, lineHeight:1}}>{level.icon}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:11, fontWeight:600, color:level.color, textTransform:"uppercase", letterSpacing:.5, marginBottom:2}}>Nivel actual</div>
+                  <div style={{fontSize:28, fontWeight:800, color:level.color, letterSpacing:-1}}>{level.name}</div>
+                  <div style={{fontSize:13, color:"var(--text4)", marginTop:2}}>⭐ {game.points.toLocaleString()} puntos</div>
+                </div>
+                {game.streak > 0 && (
+                  <div style={{textAlign:"center", background:"rgba(255,149,0,.12)", borderRadius:12, padding:"10px 14px", border:"1px solid rgba(255,149,0,.3)"}}>
+                    <div style={{fontSize:24}}>🔥</div>
+                    <div style={{fontWeight:800, fontSize:18, color:"#ff9500"}}>{game.streak}</div>
+                    <div style={{fontSize:10, color:"#ff9500", fontWeight:600}}>días</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Barra de progreso al siguiente nivel */}
+              {nextLevel && (
+                <>
+                  <div style={{display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:6}}>
+                    <span style={{color:"var(--text4)"}}>Progreso a <strong style={{color:LEVELS.find(l=>l.name===level.next)?.color||"var(--text)"}}>{level.next}</strong></span>
+                    <span style={{fontWeight:700, color:level.color}}>{pctToNext.toFixed(0)}%</span>
+                  </div>
+                  <div style={{height:8, background:"rgba(0,0,0,.1)", borderRadius:99, overflow:"hidden"}}>
+                    <div style={{height:"100%", width:`${pctToNext}%`, background:level.color, borderRadius:99, transition:"width .6s ease"}}/>
+                  </div>
+                  <div style={{display:"flex", justifyContent:"space-between", fontSize:10, marginTop:5, color:"var(--text4)"}}>
+                    <span>{game.points.toLocaleString()} pts</span>
+                    <span>Faltan {(nextLevel.min - game.points).toLocaleString()} pts para {level.next}</span>
+                  </div>
+                </>
+              )}
+              {!nextLevel && (
+                <div style={{textAlign:"center", fontSize:13, color:level.color, fontWeight:700, marginTop:8}}>
+                  🎉 ¡Nivel máximo alcanzado!
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* KPIs rápidos */}
+          <div style={s.kpiGrid(isMobile?2:4)}>
+            {[
+              {icon:"⭐", val:game.points.toLocaleString(), label:"Puntos totales", color:"#f59e0b"},
+              {icon:"🏅", val:`${unlocked.length}/${ACHIEVEMENTS.length}`, label:"Logros", color:"#6366f1"},
+              {icon:"🔥", val:game.streak||0, label:"Días de racha", color:"#ff9500"},
+              {icon:level.icon, val:level.name, label:"Nivel", color:level.color},
+            ].map(k=>(
+              <div key={k.label} style={s.kpiCard(k.color)}>
+                <div style={{fontSize:20, marginBottom:4}}>{k.icon}</div>
+                <div style={s.kpiVal}>{k.val}</div>
+                <div style={s.kpiLabel}>{k.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Mapa de niveles */}
+          <div style={s.card}>
+            <div style={{padding:"14px 18px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)"}}>🗺️ Mapa de niveles</div>
+            <div style={{padding:"14px 18px", display:"flex", flexDirection:"column", gap:10}}>
+              {LEVELS.map((l, i) => {
+                const isCurrent = l.name === level.name;
+                const isPassed  = game.points >= l.min && l.name !== level.name;
+                const isLocked  = game.points < l.min;
+                return (
+                  <div key={l.name} style={{display:"flex", alignItems:"center", gap:12, padding:"10px 14px", borderRadius:12, background:isCurrent?l.bg:"var(--bg3)", border:`1.5px solid ${isCurrent?l.color:"var(--border)"}`, opacity:isLocked?.5:1}}>
+                    <span style={{fontSize:24}}>{l.icon}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700, fontSize:13, color:isCurrent?l.color:"var(--text)"}}>{l.name} {isCurrent&&"← Estás aquí"}</div>
+                      <div style={{fontSize:11, color:"var(--text4)"}}>{l.min.toLocaleString()} — {l.max===Infinity?"∞":l.max.toLocaleString()} puntos</div>
+                    </div>
+                    {isCurrent && <div style={{width:8,height:8,borderRadius:"50%",background:l.color,boxShadow:`0 0 6px ${l.color}`}}/>}
+                    {game.points >= l.min && !isCurrent && <span style={{fontSize:14, color:"#34c759"}}>✓</span>}
+                    {isLocked && <span style={{fontSize:12, color:"var(--text3)"}}>🔒</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── LOGROS ── */}
+      {activeSection==="logros" && (
+        <>
+          {unlocked.length > 0 && (
+            <div style={s.card}>
+              <div style={{padding:"14px 18px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)", color:"#34c759"}}>
+                ✅ Desbloqueados ({unlocked.length})
+              </div>
+              {unlocked.map(a => (
+                <div key={a.id} style={{padding:"12px 18px", borderBottom:".5px solid var(--bg4)", display:"flex", gap:12, alignItems:"center"}}>
+                  <div style={{width:44, height:44, borderRadius:12, background:"rgba(52,199,89,.1)", border:"1.5px solid rgba(52,199,89,.25)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, flexShrink:0}}>{a.icon}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700, fontSize:13, color:"var(--text)"}}>{a.name}</div>
+                    <div style={{fontSize:11, color:"var(--text4)", marginTop:1}}>{a.desc}</div>
+                  </div>
+                  <div style={{background:"rgba(245,158,11,.1)", color:"#f59e0b", padding:"3px 10px", borderRadius:99, fontSize:11, fontWeight:700, flexShrink:0}}>+{a.pts} ⭐</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {locked.length > 0 && (
+            <div style={s.card}>
+              <div style={{padding:"14px 18px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)", color:"var(--text4)"}}>
+                🔒 Por desbloquear ({locked.length})
+              </div>
+              {locked.map(a => (
+                <div key={a.id} style={{padding:"12px 18px", borderBottom:".5px solid var(--bg4)", display:"flex", gap:12, alignItems:"center", opacity:.6}}>
+                  <div style={{width:44, height:44, borderRadius:12, background:"var(--bg3)", border:"1.5px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, flexShrink:0, filter:"grayscale(1)"}}>{a.icon}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700, fontSize:13, color:"var(--text)"}}>{a.name}</div>
+                    <div style={{fontSize:11, color:"var(--text4)", marginTop:1}}>{a.desc}</div>
+                  </div>
+                  <div style={{color:"var(--text3)", fontSize:11, fontWeight:600, flexShrink:0}}>+{a.pts} ⭐</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── RACHA ── */}
+      {activeSection==="racha" && (
+        <>
+          <div style={{...s.card, border:"1.5px solid rgba(255,149,0,.3)", background:"rgba(255,149,0,.05)", marginBottom:14}}>
+            <div style={{padding:"24px 20px", textAlign:"center"}}>
+              <div style={{fontSize:64, marginBottom:8}}>{game.streak > 0 ? "🔥" : "💤"}</div>
+              <div style={{fontSize:48, fontWeight:800, color:"#ff9500", letterSpacing:-2}}>{game.streak || 0}</div>
+              <div style={{fontSize:16, color:"var(--text4)", marginBottom:16}}>días de racha activa</div>
+              {game.streak > 0 ? (
+                <div style={{fontSize:13, color:"#ff9500", fontWeight:600}}>¡Sigue así! Cumple tu meta diaria hoy para continuar</div>
+              ) : (
+                <div style={{fontSize:13, color:"var(--text4)"}}>Cumple tu meta diaria para iniciar una racha 🎯</div>
+              )}
+            </div>
+          </div>
+
+          {/* Logros de racha */}
+          <div style={s.card}>
+            <div style={{padding:"14px 18px 10px", fontWeight:700, fontSize:13, borderBottom:"1px solid var(--bg4)"}}>🔥 Logros de racha</div>
+            {[
+              {id:"streak_3",  days:3,  icon:"🔥",    pts:200,  color:"#ff9500"},
+              {id:"streak_7",  days:7,  icon:"🔥🔥",  pts:500,  color:"#f59e0b"},
+              {id:"streak_30", days:30, icon:"🌋",    pts:2000, color:"#6366f1"},
+            ].map(r => {
+              const done = game.unlocked.includes(r.id);
+              const pct  = Math.min((game.streak / r.days) * 100, 100);
+              return (
+                <div key={r.id} style={{padding:"14px 18px", borderBottom:".5px solid var(--bg4)"}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
+                    <div style={{display:"flex", gap:10, alignItems:"center"}}>
+                      <span style={{fontSize:22, filter:done?"none":"grayscale(1)", opacity:done?1:.5}}>{r.icon}</span>
+                      <div>
+                        <div style={{fontWeight:700, fontSize:13, color:done?r.color:"var(--text)"}}>{r.days} días seguidos</div>
+                        <div style={{fontSize:11, color:"var(--text4)"}}>+{r.pts} puntos</div>
+                      </div>
+                    </div>
+                    {done
+                      ? <span style={{color:"#34c759", fontSize:13, fontWeight:700}}>✅ Logrado</span>
+                      : <span style={{color:"var(--text4)", fontSize:12}}>{game.streak}/{r.days} días</span>
+                    }
+                  </div>
+                  {!done && (
+                    <div style={{height:5, background:"var(--bg4)", borderRadius:99, overflow:"hidden"}}>
+                      <div style={{height:"100%", width:`${pct}%`, background:r.color, borderRadius:99, transition:"width .4s"}}/>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+};
+
 const NAV_GROUPS = [
   { label: "Principal",      items: ["Dashboard","Pedidos","Inventario","Movimientos"] },
   { label: "Clientes",       items: ["Clientes","Domicilios"] },
-  { label: "Reportes",       items: ["Reportes","Alertas"] },
+  { label: "Reportes",       items: ["Reportes","Alertas","Metas","Historial"] },
+  { label: "Gamificación",   items: ["Logros"] },
   { label: "Configuración",  items: ["Productos·Config","Categorías","Proveedores","Métodos de pago","Ajustes"] },
 ];
 
 const NAV_ICONS = {
   Dashboard:"📊", Pedidos:"🛒", Inventario:"📦", Movimientos:"🔄",
-  Clientes:"👥", Domicilios:"🛵", Reportes:"📈", Alertas:"🔔",
+  Clientes:"👥", Domicilios:"🛵", Reportes:"📈", Alertas:"🔔", Metas:"🎯",
+  Logros:"🏆", Historial:"🗂️",
   "Productos·Config":"📦", Categorías:"🏷️", Proveedores:"🏭",
   "Métodos de pago":"💳", Ajustes:"⚙️",
 };
@@ -979,6 +2116,68 @@ const CRUDTable = ({title,icon,items,columns,renderForm,emptyText,onAdd,onEdit,o
 //  FORM COMPONENTS (must be top-level to follow Rules of Hooks)
 // ═══════════════════════════════════════════════════════════════
 
+const ClientForm = ({initial, onSave, onClose, clients}) => {
+  const [f,          setF]          = useState(initial || {name:"",phone:"",email:"",address:""});
+  const [dupWarning, setDupWarning] = useState(null);
+
+  const set = (k, v) => {
+    setF(x => ({...x, [k]:v}));
+    setDupWarning(null);
+  };
+
+  const checkDup = (field, val) => {
+    if (initial) return; // no chequeamos al editar
+    const norm = s => (s||"").trim().toLowerCase();
+    const found = (clients||[]).find(c =>
+      (field==="phone" && val && norm(c.phone) === norm(val)) ||
+      (field==="email" && val && norm(c.email) === norm(val)) ||
+      (field==="name"  && val && norm(c.name)  === norm(val))
+    );
+    setDupWarning(found || null);
+  };
+
+  return (
+    <div>
+      <Inp label="Nombre *" value={f.name}
+        onChange={e=>{ set("name",e.target.value); checkDup("name",e.target.value); }}
+        placeholder="Juan Pérez"/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+        <Inp label="Teléfono" value={f.phone}
+          onChange={e=>{ set("phone",e.target.value); checkDup("phone",e.target.value); }}
+          placeholder="+57 300…"/>
+        <Inp label="Email" value={f.email}
+          onChange={e=>{ set("email",e.target.value); checkDup("email",e.target.value); }}
+          placeholder="juan@mail.com"/>
+      </div>
+      <Inp label="Dirección" value={f.address}
+        onChange={e=>set("address",e.target.value)}
+        placeholder="Cra 5 #10-20…"/>
+
+      {/* Aviso de duplicado */}
+      {dupWarning && !initial && (
+        <div style={{background:"rgba(255,149,0,.1)",border:"1.5px solid rgba(255,149,0,.3)",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#ff9500",marginBottom:6}}>⚠️ Cliente ya registrado</div>
+          <div style={{fontSize:12,color:"var(--text4)",marginBottom:10}}>Encontramos un cliente con la misma información:</div>
+          <div style={{background:"var(--bg2)",borderRadius:9,padding:"10px 12px",fontSize:12,marginBottom:8}}>
+            <div style={{fontWeight:700,color:"var(--text)",marginBottom:3}}>👤 {dupWarning.name}</div>
+            {dupWarning.phone   && <div style={{color:"var(--text4)"}}>📞 {dupWarning.phone}</div>}
+            {dupWarning.email   && <div style={{color:"var(--text4)"}}>✉️ {dupWarning.email}</div>}
+            {dupWarning.address && <div style={{color:"var(--text4)"}}>📍 {dupWarning.address}</div>}
+          </div>
+          <div style={{fontSize:11,color:"var(--text4)"}}>Si guardas, se usará el cliente existente.</div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
+        <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
+        <Btn onClick={()=>{ if(!f.name) return alert("Nombre requerido"); onSave({...initial,...f}); }}>
+          {dupWarning && !initial ? "Usar cliente existente" : "Guardar"}
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
 const CategoryForm = ({initial, onSave, onClose}) => {
   const [name, setName] = useState(initial?.name || "");
   return (
@@ -1276,6 +2475,16 @@ export default function App() {
   // ── Notificaciones push ─────────────────────────────────────
   const { permission, requestPermission, sendAlerts } = useNotifications(db);
 
+  // ── Metas de ventas ─────────────────────────────────────────
+  const {
+    goals, setGoals,
+    dailySales, weeklySales, monthlySales,
+    dailyStatus, weeklyStatus, monthlyStatus,
+  } = useGoals(db, permission);
+
+  // ── Gamificación ────────────────────────────────────────────
+  const { game, level, nextLevel, pctToNext, clearNew } = useGamification(db, dailyStatus, goals, permission);
+
   const [tab, setTab] = useState("Dashboard");
   const [sideOpen, setSideOpen] = useState(false);
   const [editProd,   setEditProd]   = useState(null);
@@ -1506,6 +2715,40 @@ export default function App() {
                 }
               </div>
             </div>
+
+            {/* Mini widget de gamificación */}
+            <div style={{...s.card, background:level.bg, border:`1.5px solid ${level.color}`, cursor:"pointer"}} onClick={()=>setTab("Logros")}>
+              <div style={{padding:"14px 18px", display:"flex", alignItems:"center", gap:14}}>
+                <span style={{fontSize:36}}>{level.icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:11, fontWeight:600, color:level.color, textTransform:"uppercase", letterSpacing:.5}}>Tu nivel</div>
+                  <div style={{fontSize:18, fontWeight:800, color:level.color, letterSpacing:-.5}}>{level.name} · ⭐ {game.points.toLocaleString()} pts</div>
+                  {nextLevel && (
+                    <div style={{marginTop:6}}>
+                      <div style={{height:5, background:"rgba(0,0,0,.1)", borderRadius:99, overflow:"hidden"}}>
+                        <div style={{height:"100%", width:`${pctToNext}%`, background:level.color, borderRadius:99}}/>
+                      </div>
+                      <div style={{fontSize:10, color:level.color, marginTop:3}}>
+                        {pctToNext.toFixed(0)}% hacia {level.next} · {(nextLevel.min - game.points).toLocaleString()} pts restantes
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {game.streak > 0 && (
+                  <div style={{textAlign:"center", flexShrink:0}}>
+                    <div style={{fontSize:22}}>🔥</div>
+                    <div style={{fontWeight:800, fontSize:16, color:"#ff9500"}}>{game.streak}</div>
+                    <div style={{fontSize:9, color:"#ff9500"}}>días</div>
+                  </div>
+                )}
+                {game.newAchievements?.length > 0 && (
+                  <div style={{background:"#f59e0b", color:"#fff", borderRadius:99, padding:"3px 10px", fontSize:11, fontWeight:700, flexShrink:0}}>
+                    🏅 +{game.newAchievements.length} nuevo{game.newAchievements.length>1?"s":""}
+                  </div>
+                )}
+                <span style={{fontSize:12, color:level.color}}>→</span>
+              </div>
+            </div>
           </>
         )}
 
@@ -1680,68 +2923,7 @@ export default function App() {
               }
             }}
             onEdit={editClient} onDelete={deleteClient}
-            renderForm={({initial,onSave,onClose})=>{
-              const [f,setF]=useState(initial||{name:"",phone:"",email:"",address:""});
-              const [dupWarning,setDupWarning]=useState(null);
-              const set=(k,v)=>{
-                setF(x=>({...x,[k]:v}));
-                setDupWarning(null); // limpiar aviso al editar
-              };
-              // Detectar duplicado en tiempo real (solo al crear)
-              const checkDup = (field, val) => {
-                if (initial) return; // no chequeamos al editar
-                const norm = s=>(s||"").trim().toLowerCase();
-                const found = db.clients.find(c =>
-                  (field==="phone" && val && norm(c.phone)===norm(val)) ||
-                  (field==="email" && val && norm(c.email)===norm(val)) ||
-                  (field==="name"  && val && norm(c.name) ===norm(val))
-                );
-                setDupWarning(found ? found : null);
-              };
-              return <div>
-                <Inp label="Nombre *" value={f.name}
-                  onChange={e=>{ set("name",e.target.value); checkDup("name",e.target.value); }}
-                  placeholder="Juan Pérez"/>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
-                  <Inp label="Teléfono" value={f.phone}
-                    onChange={e=>{ set("phone",e.target.value); checkDup("phone",e.target.value); }}
-                    placeholder="+57 300…"/>
-                  <Inp label="Email" value={f.email}
-                    onChange={e=>{ set("email",e.target.value); checkDup("email",e.target.value); }}
-                    placeholder="juan@mail.com"/>
-                </div>
-                <Inp label="Dirección" value={f.address} onChange={e=>set("address",e.target.value)} placeholder="Cra 5 #10-20…"/>
-
-                {/* Aviso de duplicado */}
-                {dupWarning&&!initial&&(
-                  <div style={{background:"rgba(255,149,0,.1)",border:"1.5px solid rgba(255,149,0,.3)",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
-                    <div style={{fontWeight:700,fontSize:13,color:"#ff9500",marginBottom:6}}>⚠️ Cliente ya registrado</div>
-                    <div style={{fontSize:12,color:"var(--text4)",marginBottom:10}}>
-                      Encontramos un cliente con la misma información:
-                    </div>
-                    <div style={{background:"var(--bg2)",borderRadius:9,padding:"10px 12px",fontSize:12,marginBottom:10}}>
-                      <div style={{fontWeight:700,color:"var(--text)",marginBottom:3}}>👤 {dupWarning.name}</div>
-                      {dupWarning.phone&&<div style={{color:"var(--text4)"}}>📞 {dupWarning.phone}</div>}
-                      {dupWarning.email&&<div style={{color:"var(--text4)"}}>✉️ {dupWarning.email}</div>}
-                      {dupWarning.address&&<div style={{color:"var(--text4)"}}>📍 {dupWarning.address}</div>}
-                    </div>
-                    <div style={{fontSize:11,color:"var(--text4)"}}>
-                      Si guardas, se usará el cliente existente en lugar de crear uno nuevo.
-                    </div>
-                  </div>
-                )}
-
-                <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:10}}>
-                  <Btn variant="secondary" onClick={onClose}>Cancelar</Btn>
-                  <Btn onClick={()=>{
-                    if(!f.name) return alert("Nombre requerido");
-                    onSave({...initial,...f});
-                  }}>
-                    {dupWarning&&!initial ? "Usar cliente existente" : "Guardar"}
-                  </Btn>
-                </div>
-              </div>;
-            }}
+            renderForm={(props) => <ClientForm {...props} clients={db.clients}/>}
           />
         )}
 
@@ -1806,6 +2988,31 @@ export default function App() {
             )}
             {lowStock.length===0&&<EmptyState icon="✅" text="¡Todo el inventario está en buen estado!"/>}
           </>
+        )}
+
+        {/* ─── HISTORIAL MENSUAL ─── */}
+        {tab==="Historial"&&(
+          <HistorialTab db={db} s={s} isMobile={isMobile}/>
+        )}
+
+        {/* ─── METAS ─── */}
+        {tab==="Metas"&&(
+          <GoalsTab
+            db={db} s={s} isMobile={isMobile}
+            goals={goals} setGoals={setGoals}
+            dailySales={dailySales} weeklySales={weeklySales} monthlySales={monthlySales}
+            dailyStatus={dailyStatus} weeklyStatus={weeklyStatus} monthlyStatus={monthlyStatus}
+            permission={permission} onRequestNotif={async()=>{ const r=await requestPermission(); if(r==="granted") sendAlerts(); }}
+            game={game} level={level} nextLevel={nextLevel} pctToNext={pctToNext}
+          />
+        )}
+
+        {/* ─── LOGROS / GAMIFICACIÓN ─── */}
+        {tab==="Logros"&&(
+          <GamificationTab
+            game={game} level={level} nextLevel={nextLevel} pctToNext={pctToNext}
+            clearNew={clearNew} s={s} isMobile={isMobile}
+          />
         )}
 
         {/* ─── REPORTES ─── */}
