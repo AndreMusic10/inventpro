@@ -1031,6 +1031,8 @@ const HistorialTab = ({ db, s, isMobile }) => {
   );
 };
 
+const ORDER_STATES = ["Pendiente", "En proceso", "Enviado", "Entregado"];
+
 const ORDER_STATE_COLORS = {
   "Pendiente":   { bg:"#fef9c3", text:"#a16207", dot:"#f59e0b" },
   "En proceso":  { bg:"#dbeafe", text:"#1d4ed8", dot:"#3b82f6" },
